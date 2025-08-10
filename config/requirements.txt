@@ -1,0 +1,30 @@
+# Qdrant 및 벡터DB 관련
+qdrant-client==1.7.0          # Qdrant 벡터DB와 통신하는 Python 클라이언트
+
+# Ollama 및 LLM/임베딩 관련
+ollama==0.1.7                 # Ollama API 연동 및 LLM/임베딩 활용
+langchain>=0.1.0              # LLM 워크플로우 및 체인 구성 프레임워크
+langchain-text-splitters>=0.0.1 # 텍스트 청크 분할 유틸리티
+
+# PDF 처리 관련
+pypdf2==3.0.1                 # PDF 파일 파싱 및 처리
+pdfplumber==0.10.3            # PDF에서 텍스트, 표 등 추출
+reportlab==4.0.7              # PDF 생성 및 조작
+
+# 웹 서버 및 API 관련
+fastapi==0.104.1              # 비동기 Python 웹 프레임워크 (API 서버)
+uvicorn==0.24.0               # FastAPI용 ASGI 서버
+python-multipart==0.0.6       # 파일 업로드 등 멀티파트 폼 데이터 처리
+
+# 환경 변수 및 설정 관리
+python-dotenv==1.0.0          # .env 환경변수 파일 로드
+pydantic==2.5.0               # 데이터 검증 및 설정 관리 (FastAPI와 연동)
+
+# 로깅
+loguru==0.7.2                 # 간편하고 강력한 로깅 라이브러리
+
+# 테스트
+pytest==7.4.3                 # 테스트 프레임워크
+
+# 기타
+requests>=2.31.0              # HTTP 요청 라이브러리
