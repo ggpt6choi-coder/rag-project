@@ -240,3 +240,4 @@ curl http://localhost:8000/api/v1/health
 
 실제 사용 예제 코드는 sample_workflow/ 디렉터리로 이동되었습니다.
 기존 examples/ 디렉토리의 모든 예제 실행 명령어를 test_qdrant/로 변경
+# rag-project
