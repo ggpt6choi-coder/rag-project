@@ -7,7 +7,7 @@
 ### 🧪 테스트 스크립트
 
 - **[test_qa_direct.py](./test_qa_direct.py)** - Q&A 시스템 직접 테스트
-- **[test_qa_simple.py](./test_qa_simple.py)** - 간단한 Q&A 테스트
+- **[test_qa_api.py](./test_qa_api.py)** - 간단한 Q&A 테스트
 
 ## 🚀 사용법
 
@@ -18,7 +18,7 @@
 python test_workflow/test_qa_direct.py
 
 # 간단한 Q&A 테스트 (기본 기능만)
-python test_workflow/test_qa_simple.py
+python test_workflow/test_qa_api.py
 ```
 
 ### 테스트 환경 설정
@@ -49,7 +49,7 @@ python test_workflow/test_qa_direct.py
 - 응답 시간 측정
 - 결과 품질 평가
 
-### test_qa_simple.py
+### test_qa_api.py
 
 - 기본적인 Q&A 기능 테스트
 - 빠른 기능 확인용
@@ -67,7 +67,7 @@ python test_workflow/test_qa_direct.py
 
 ```bash
 # 기본 Q&A 테스트
-python test_workflow/test_qa_simple.py
+python test_workflow/test_qa_api.py
 
 # 상세 테스트
 python test_workflow/test_qa_direct.py

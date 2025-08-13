@@ -11,7 +11,7 @@ def test_qa_api():
     
     # 1. Q&A 서비스 테스트
     print("🔍 Q&A 서비스 테스트...")
-    response = requests.get("http://localhost:8001/api/v1/qa/test")
+    response = requests.get("http://localhost:8000/api/v1/qa/test")
     if response.status_code == 200:
         result = response.json()
         print(f"✅ 상태: {result.get('status')}")
@@ -22,7 +22,7 @@ def test_qa_api():
     
     # 2. 사용 가능한 모델 확인
     print("\n📋 사용 가능한 모델...")
-    response = requests.get("http://localhost:8001/api/v1/qa/models")
+    response = requests.get("http://localhost:8000/api/v1/qa/models")
     if response.status_code == 200:
         models = response.json().get("models", [])
         print(f"✅ 모델 수: {len(models)}")
@@ -45,13 +45,13 @@ def test_qa_api():
         
         payload = {
             "question": question,
-            "max_results": 5,
+            # "max_results": 5,
             "max_tokens": 300,
             "include_metadata": True
         }
         
         response = requests.post(
-            "http://localhost:8001/api/v1/qa",
+            "http://localhost:8000/api/v1/qa",
             json=payload,
             timeout=120  # 2분 타임아웃
         )

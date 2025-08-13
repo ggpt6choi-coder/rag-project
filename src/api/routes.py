@@ -11,7 +11,7 @@ from .models import (
     DocumentsResponse, CollectionInfo, DeleteDocumentResponse,
     ErrorResponse, HealthCheckResponse, QARequest, QAResponse
 )
-from ..pdf_processor import PDFProcessor
+from ..pdf_processor import PDFProcessor, get_processor
 from ..text_chunker import TextChunker
 from ..embedding_service import EmbeddingService
 from ..qdrant_manager import QdrantManager
@@ -24,6 +24,92 @@ router = APIRouter()
 
 # 서비스 인스턴스들
 pdf_processor = PDFProcessor()
+@router.post("/upload-file", response_model=PDFUploadResponse)
+async def upload_file(
+    file: UploadFile = File(...),
+    title: str = Form(None),
+    author: str = Form(None),
+    description: str = Form(None),
+    document_id: str = Form(None)
+):
+    """
+    다양한 파일(docx, xlsx, pptx, pdf 등)을 업로드하고 처리합니다.
+    """
+    start_time = time.time()
+    try:
+        # 업로드 디렉토리 생성
+        os.makedirs(config.UPLOAD_DIR, exist_ok=True)
+        # 파일 저장
+        file_path = os.path.join(config.UPLOAD_DIR, f"{uuid.uuid4()}_{file.filename}")
+        with open(file_path, "wb") as buffer:
+            content = await file.read()
+            buffer.write(content)
+        # 파일 확장자 체크텥
+        name, ext = os.path.splitext(file.filename)
+        if not ext:
+            raise HTTPException(status_code=400, detail="파일 확장자가 없는 파일은 지원하지 않습니다.")
+        # 파일 확장자에 따라 프로세서 선택
+        processor = get_processor(file_path)
+        # 텍스트 추출
+        extracted = processor.extract_text(file_path)
+        if isinstance(extracted, dict):
+            text = extracted.get('text', '')
+            # PDF라면 메타데이터를 그대로 사용, 아니면 폼값 기반으로 재구성
+            if ext.lower() == '.pdf':
+                metadata = extracted.get('metadata', {})
+                # 폼값이 있으면 덮어쓰기
+                if title:
+                    metadata['title'] = title
+                if author:
+                    metadata['author'] = author
+                if description:
+                    metadata['description'] = description
+                metadata['file_type'] = ext.lower()
+            else:
+                metadata = {
+                    'title': title or file.filename,
+                    'author': author or '',
+                    'description': description or '',
+                    'file_type': ext.lower(),
+                }
+        else:
+            text = extracted
+            metadata = {
+                'title': title or file.filename,
+                'author': author or '',
+                'description': description or '',
+                'file_type': ext.lower(),
+            }
+        if not text or not isinstance(text, str) or not text.strip():
+            raise HTTPException(status_code=400, detail="파일에서 텍스트를 추출할 수 없습니다.")
+        # 텍스트 청킹
+        chunks = text_chunker.chunk_text(text)
+        if not chunks:
+            raise HTTPException(status_code=400, detail="텍스트 청크가 생성되지 않았습니다.")
+        # 임베딩 생성
+        embedded_chunks = embedding_service.embed_chunks(chunks)
+        if not embedded_chunks:
+            raise HTTPException(status_code=400, detail="임베딩 생성에 실패했습니다.")
+        # 각 청크에 메타데이터 추가
+        for chunk in embedded_chunks:
+            chunk['metadata'] = metadata
+        # Qdrant에 저장
+        doc_id = document_id if document_id else str(uuid.uuid4())
+        success = qdrant_manager.store_vectors(embedded_chunks, doc_id)
+        if not success:
+            raise HTTPException(status_code=500, detail="벡터 저장에 실패했습니다")
+        processing_time = time.time() - start_time
+        return PDFUploadResponse(
+            document_id=doc_id,
+            status="success",
+            message="파일 처리 완료",
+            chunks_count=len(embedded_chunks),
+            processing_time=processing_time,
+            metadata=metadata
+        )
+    except Exception as e:
+        logger.error(f"파일 업로드 중 오류: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 text_chunker = TextChunker()
 embedding_service = EmbeddingService()
 qdrant_manager = QdrantManager()
@@ -135,26 +221,36 @@ async def get_documents():
     """
     try:
         document_ids = search_service.get_documents()
-        
-        # 실제로는 각 문서의 상세 정보를 조회해야 함
         documents = []
+        # 각 document_id별 대표 메타데이터 추출
+        from datetime import datetime
         for doc_id in document_ids:
-            # 간단한 정보만 반환 (실제로는 더 상세한 정보 필요)
+            # Qdrant에서 해당 document_id의 첫 번째 벡터(포인트) 메타데이터 조회
+            meta = qdrant_manager.get_document_metadata(doc_id)
+            extraction_time = meta.get('extraction_time', None) if meta else None
+            # extraction_time이 없거나 빈 문자열이면 현재 시간으로 대체
+            if not extraction_time:
+                upload_time = datetime.now()
+            else:
+                try:
+                    upload_time = datetime.fromisoformat(extraction_time)
+                except Exception:
+                    upload_time = datetime.now()
             documents.append({
                 'document_id': doc_id,
-                'title': f"Document {doc_id}",
-                'author': "Unknown",
-                'total_pages': 0,
-                'chunks_count': 0,
-                'upload_time': "2024-01-01T00:00:00",
-                'file_size': 0
+                'title': meta.get('title', f"Document {doc_id}") if meta else f"Document {doc_id}",
+                'author': meta.get('author', "Unknown") if meta else "Unknown",
+                'description': meta.get('description', "") if meta else "",
+                'file_type': meta.get('file_type', "") if meta else "",
+                'total_pages': meta.get('total_pages', 0) if meta else 0,
+                'chunks_count': meta.get('chunks_count', 0) if meta else 0,
+                'upload_time': upload_time,
+                'file_size': meta.get('file_size', 0) if meta else 0
             })
-        
         return DocumentsResponse(
             documents=documents,
             total_documents=len(documents)
         )
-        
     except Exception as e:
         logger.error(f"문서 목록 조회 중 오류: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -240,12 +336,12 @@ async def ask_question(request: QARequest):
         if request.include_metadata:
             result = qa_service.ask_with_metadata(
                 question=request.question,
-                max_results=request.max_results
+                # max_results=request.max_results
             )
         else:
             result = qa_service.ask_question(
                 question=request.question,
-                max_results=request.max_results,
+                # max_results=request.max_results,
                 max_tokens=request.max_tokens
             )
         
@@ -290,18 +386,27 @@ async def test_qa_service():
 
 @router.get("/")
 async def root():
-    """
-    루트 엔드포인트
-    """
-    return {
-        "message": "PDF to Qdrant Vector Database API",
-        "version": "1.0.0",
-        "endpoints": [
-            "POST /upload-pdf",
-            "POST /search",
-            "GET /documents",
-            "GET /collections",
-            "DELETE /documents/{document_id}",
-            "GET /health"
-        ]
-    }
+    try:
+        start_time = time.time()
+        qa_service = QAService()
+        if request.include_metadata:
+            result = qa_service.ask_with_metadata(
+                question=request.question,
+                document_id=request.document_id
+            )
+        else:
+            result = qa_service.ask_question(
+                question=request.question,
+                document_id=request.document_id,
+                max_tokens=request.max_tokens
+            )
+        processing_time = time.time() - start_time
+        result["processing_time"] = processing_time
+        return QAResponse(**result)
+    except Exception as e:
+        logger.error(f"Q&A 처리 중 오류: {e}")
+        return QAResponse(
+            question=request.question,
+            answer="죄송합니다. 질문을 처리하는 중 오류가 발생했습니다.",
+            error=str(e)
+        )

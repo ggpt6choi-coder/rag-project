@@ -91,6 +91,7 @@ class QARequest(BaseModel):
     max_results: int = Field(default=5, description="검색할 최대 결과 수")
     max_tokens: int = Field(default=500, description="생성할 최대 토큰 수")
     include_metadata: bool = Field(default=False, description="메타데이터 포함 여부")
+    document_id: str = Field(default=None, description="검색할 문서의 document_id (선택)")
 
 class QAResponse(BaseModel):
     """Q&A 응답 모델"""

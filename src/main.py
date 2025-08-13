@@ -36,8 +36,15 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
 # 라우터 등록
 app.include_router(router, prefix="/api/v1", tags=["api"])
+
+# favicon.ico 요청 무시 (204 No Content)
+from fastapi.responses import Response
+@app.get("/favicon.ico", include_in_schema=False)
+async def favicon():
+    return Response(status_code=204)
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request, exc):

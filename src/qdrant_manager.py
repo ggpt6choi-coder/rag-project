@@ -307,6 +307,7 @@ class QdrantManager:
             logger.error(f"문서 삭제 실패: {e}")
             return False
     
+    
     def get_documents(self) -> List[str]:
         """
         저장된 모든 문서 ID를 반환합니다.
@@ -382,3 +383,27 @@ class QdrantManager:
             return Filter(must=conditions)
         else:
             return None
+
+    def get_document_metadata(self, document_id: str) -> dict:
+        """
+        해당 document_id의 첫 번째 벡터(포인트)에서 메타데이터를 추출
+        """
+        if not self.client:
+            if not self.connect():
+                return {}
+        try:
+            points, _ = self.client.scroll(
+                collection_name=self.collection_name,
+                limit=1,
+                filter={
+                    "must": [
+                        {"key": "document_id", "match": {"value": document_id}}
+                    ]
+                }
+            )
+            if points:
+                return points[0].payload.get("metadata", points[0].payload)
+            return {}
+        except Exception as e:
+            logger.error(f"문서 메타데이터 조회 실패: {e}")
+            return {}
