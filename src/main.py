@@ -6,6 +6,9 @@ from fastapi.responses import JSONResponse
 from loguru import logger
 import uvicorn
 
+from fastapi.staticfiles import StaticFiles
+from fastapi.openapi.docs import get_swagger_ui_html
+
 from src.config import config
 from src.api.routes import router
 
@@ -20,12 +23,26 @@ logger.add(
 
 # FastAPI 앱 생성
 app = FastAPI(
-    title="PDF to Qdrant Vector Database API",
-    description="PDF 문서를 청킹하여 Qdrant 벡터 데이터베이스에 저장하는 API",
+    title="Document to Qdrant Vector Database API",
+    description="문서를 청킹하여 Qdrant 벡터 데이터베이스에 저장하는 API",
     version="1.0.0",
-    docs_url="/docs",
-    redoc_url="/redoc"
+    docs_url=None,  # Swagger UI 기본 비활성화
+    redoc_url=None
 )
+
+# static/swagger 폴더를 /static 경로로 서빙
+app.mount("/static", StaticFiles(directory=os.path.join(os.path.dirname(__file__), "../static")), name="static")
+
+# 오프라인 Swagger UI 커스텀 엔드포인트
+@app.get("/docs", include_in_schema=False)
+async def custom_swagger_ui_html():
+    return get_swagger_ui_html(
+        openapi_url=app.openapi_url,
+        title=app.title + " - Swagger UI",
+        swagger_js_url="/static/swagger/swagger-ui-bundle.js",
+        swagger_css_url="/static/swagger/swagger-ui.css",
+        swagger_favicon_url="/static/swagger/favicon-32x32.png"
+    )
 
 
 # CORS 미들웨어 추가

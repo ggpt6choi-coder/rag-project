@@ -175,70 +175,6 @@ embedding_service = EmbeddingService()
 qdrant_manager = QdrantManager()
 search_service = SearchService(qdrant_manager, embedding_service)
 
-@router.post("/upload-pdf", response_model=PDFUploadResponse)
-async def upload_pdf(
-    file: UploadFile = File(...),
-    # title, author, description 제거
-    collection_name: str = Form(None)
-):
-    """
-    PDF 파일을 업로드하고 처리합니다.
-    """
-    start_time = time.time()
-    
-    try:
-        # 파일 유효성 검사
-        if not file.filename.lower().endswith('.pdf'):
-            raise HTTPException(status_code=400, detail="PDF 파일만 업로드 가능합니다")
-        
-        # 업로드 디렉토리 생성
-        os.makedirs(config.UPLOAD_DIR, exist_ok=True)
-        
-        # 파일 저장
-        file_path = os.path.join(config.UPLOAD_DIR, f"{uuid.uuid4()}_{file.filename}")
-        with open(file_path, "wb") as buffer:
-            content = await file.read()
-            buffer.write(content)
-        
-        # PDF 처리
-        pdf_data = pdf_processor.extract_text(file_path)
-        
-        # 텍스트 청킹
-        chunks = text_chunker.chunk_text(pdf_data['text'])
-        
-        # 임베딩 생성
-        embedded_chunks = embedding_service.embed_chunks(chunks)
-        
-        # 메타데이터 구성
-        metadata = pdf_data['metadata'].copy()
-        metadata['title'] = file.filename
-            
-        # 각 청크에 메타데이터 추가
-        for chunk in embedded_chunks:
-            chunk['metadata'] = metadata
-        
-        # Qdrant에 저장
-        document_id = str(uuid.uuid4())
-        qdrant_mgr = QdrantManager(collection_name=collection_name) if collection_name else QdrantManager()
-        success = qdrant_mgr.store_vectors(embedded_chunks, document_id)
-
-        if not success:
-            raise HTTPException(status_code=500, detail="벡터 저장에 실패했습니다")
-
-        processing_time = time.time() - start_time
-
-        return PDFUploadResponse(
-            document_id=document_id,
-            status="success",
-            message="PDF 처리 완료",
-            chunks_count=len(embedded_chunks),
-            processing_time=processing_time,
-            metadata=metadata
-        )
-        
-    except Exception as e:
-        logger.error(f"PDF 업로드 중 오류: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/search", response_model=SearchResponse)
 async def search_documents(request: SearchRequest):
@@ -382,9 +318,7 @@ async def ask_question(request: QARequest):
     """Q&A 질문 처리"""
     try:
         start_time = time.time()
-        
         qa_service = QAService()
-        
         if request.include_metadata:
             result = qa_service.ask_with_metadata(
                 question=request.question,
@@ -399,14 +333,12 @@ async def ask_question(request: QARequest):
                 collection_name=request.collection_name,
                 max_results=request.max_results,
                 max_tokens=request.max_tokens,
-                document_id=request.document_id
+                document_id=request.document_id,
+                history=request.history
             )
-        
         processing_time = time.time() - start_time
         result["processing_time"] = processing_time
-        
         return QAResponse(**result)
-        
     except Exception as e:
         logger.error(f"Q&A 처리 중 오류: {e}")
         return QAResponse(

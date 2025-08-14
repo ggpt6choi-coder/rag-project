@@ -131,6 +131,7 @@ class QARequest(BaseModel):
     include_metadata: bool = Field(default=False, description="메타데이터 포함 여부")
     document_id: str = Field(default=None, description="검색할 문서의 document_id (선택)")
     collection_name: str = Field(default=None, description="검색할 Qdrant 컬렉션명 (선택)")
+    history: list = Field(default=None, description="이전 Q&A 대화 이력 (예: [{\"role\": \"user\", \"content\": ...}, {\"role\": \"assistant\", ...}])")
 
 class QAResponse(BaseModel):
     """Q&A 응답 모델"""
