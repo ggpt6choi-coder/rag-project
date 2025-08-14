@@ -1,3 +1,68 @@
+import cv2
+import numpy as np
+from PIL import Image
+
+try:
+    import pytesseract
+except ImportError:
+    pytesseract = None
+try:
+    import easyocr
+except ImportError:
+    easyocr = None
+
+# ---- 파일 포맷별 프로세서 ----
+class BaseFileProcessor:
+    """파일 추출 기본 클래스"""
+    def extract_text(self, file_path: str) -> str:
+        raise NotImplementedError
+
+class ImageProcessor(BaseFileProcessor):
+    def extract_text(self, file_path: str) -> str:
+        img = cv2.imread(file_path)
+        img = preprocess_image_for_ocr(img)
+        # easyocr 우선 사용, 실패 시 pytesseract fallback
+        text = ""
+        if easyocr:
+            try:
+                reader = easyocr.Reader(['ko', 'en'])
+                text = "\n".join([r[1] for r in reader.readtext(img)])
+            except Exception as e:
+                print(f"[easyocr 오류] {e}")
+        if (not text or not text.strip()) and pytesseract:
+            try:
+                from PIL import Image
+                pil_img = Image.fromarray(img)
+                text = pytesseract.image_to_string(pil_img, lang='kor+eng')
+            except Exception as e:
+                print(f"[pytesseract 오류] {e}")
+        return text
+
+# 이미지 전처리 및 OCR 함수
+def preprocess_image_for_ocr(img):
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    # 샤프닝 필터 적용
+    kernel = np.array([[0, -1, 0], [-1, 5,-1], [0, -1, 0]])
+    sharp = cv2.filter2D(gray, -1, kernel)
+    # 대비 증가
+    sharp = cv2.convertScaleAbs(sharp, alpha=1.5, beta=0)
+    # adaptive threshold
+    proc = cv2.adaptiveThreshold(sharp, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 15, 10)
+    proc = cv2.fastNlMeansDenoising(proc, None, 30, 7, 21)
+    proc = cv2.resize(proc, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
+    return proc
+
+def ocr_image(img) -> str:
+    if pytesseract:
+        pil_img = Image.fromarray(img)
+        text = pytesseract.image_to_string(pil_img, lang='kor+eng')
+        if text.strip():
+            return text
+    if easyocr:
+        reader = easyocr.Reader(['ko', 'en'])
+        text = "\n".join([r[1] for r in reader.readtext(img)])
+        return text
+    return ""
 import os
 import hashlib
 from typing import Dict, List, Optional, Tuple
@@ -23,11 +88,22 @@ class ExcelProcessor(BaseFileProcessor):
     def extract_text(self, file_path: str) -> str:
         import openpyxl
         wb = openpyxl.load_workbook(file_path)
-        text = []
+        text_blocks = []
         for sheet in wb.worksheets:
-            for row in sheet.iter_rows(values_only=True):
-                text.append(" ".join([str(cell) for cell in row if cell is not None]))
-        return "\n".join(text)
+            rows = list(sheet.iter_rows(values_only=True))
+            if not rows or all([all(cell is None or str(cell).strip() == '' for cell in row) for row in rows]):
+                continue  # 빈 시트 skip
+            block = [f"[{sheet.title}]"]
+            # 헤더 추출 (첫 행)
+            header = rows[0]
+            header_text = " | ".join([str(cell) if cell is not None else "" for cell in header])
+            block.append(f"| {header_text} |")
+            # 데이터 행
+            for row in rows[1:]:
+                row_text = " | ".join([str(cell) if cell is not None else "" for cell in row])
+                block.append(f"| {row_text} |")
+            text_blocks.append("\n".join(block))
+        return "\n\n".join(text_blocks) if text_blocks else ""
 
 class PowerPointProcessor(BaseFileProcessor):
     def extract_text(self, file_path: str) -> str:
@@ -50,6 +126,8 @@ def get_processor(file_path: str) -> BaseFileProcessor:
         return ExcelProcessor()
     elif ext == ".pptx":
         return PowerPointProcessor()
+    elif ext in [".jpg", ".jpeg", ".png"]:
+        return ImageProcessor()
     else:
         raise ValueError("지원하지 않는 파일 형식입니다.")
 

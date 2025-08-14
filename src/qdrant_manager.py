@@ -1,3 +1,4 @@
+    
 from typing import List, Dict, Any, Optional, Tuple
 from qdrant_client import QdrantClient
 from qdrant_client.models import (
@@ -40,7 +41,6 @@ class QdrantManager:
             collections = self.client.get_collections()
             logger.info(f"Qdrant 연결 성공: {len(collections.collections)}개 컬렉션")
             return True
-            
         except Exception as e:
             logger.error(f"Qdrant 연결 실패: {e}")
             return False
@@ -137,11 +137,10 @@ class QdrantManager:
                     'chunk_size': chunk.get('chunk_size', 0),
                     'embedding_dimension': chunk.get('embedding_dimension', len(embedding))
                 }
-                
-                # 메타데이터 추가
-                if 'metadata' in chunk:
-                    payload['metadata'] = chunk['metadata']
-                
+                # 메타데이터(문서명, 시트명, 행번호 등) 보장
+                if 'metadata' in chunk and isinstance(chunk['metadata'], dict):
+                    for k, v in chunk['metadata'].items():
+                        payload[k] = v
                 point = PointStruct(
                     id=i,  # 정수 ID 사용
                     vector=embedding,
@@ -239,36 +238,45 @@ class QdrantManager:
             logger.error(f"텍스트 검색 실패: {e}")
             return []
     
-    def get_collection_info(self) -> Dict[str, Any]:
+    def get_all_collections_info(self) -> list:
         """
-        컬렉션 정보를 반환합니다.
-        
-        Returns:
-            컬렉션 정보
+        Qdrant에 존재하는 모든 컬렉션의 정보를 반환합니다.
         """
         if not self.client:
             if not self.connect():
-                return {}
-        
+                return []
         try:
-            collection_info = self.client.get_collection(self.collection_name)
-            print('DEBUG collection_info:', collection_info)
-            print('DEBUG collection_info.__dict__:', getattr(collection_info, '__dict__', str(collection_info)))
-            
-            return {
-                'status': collection_info.status.value if hasattr(collection_info.status, 'value') else str(collection_info.status),
-                'optimizer_status': collection_info.optimizer_status.value if hasattr(collection_info.optimizer_status, 'value') else str(collection_info.optimizer_status),
-                'vectors_count': collection_info.vectors_count,
-                'indexed_vectors_count': collection_info.indexed_vectors_count,
-                'points_count': collection_info.points_count,
-                'segments_count': collection_info.segments_count,
-                'config': collection_info.config.dict(exclude_none=True, exclude_unset=True),
-                'payload_schema': collection_info.payload_schema
-            }
-            
+            collections = self.client.get_collections()
+            infos = []
+            for col in collections.collections:
+                try:
+                    col_info = self.client.get_collection(col.name)
+                    # config 파싱 오류 우회
+                    try:
+                        config = col_info.config.asdict()
+                    except Exception:
+                        try:
+                            config = dict(col_info.config)
+                        except Exception:
+                            config = getattr(col_info.config, '__dict__', str(col_info.config))
+                    infos.append({
+                        'collection_name': col.name,
+                        'status': col_info.status.value if hasattr(col_info.status, 'value') else str(col_info.status),
+                        'optimizer_status': col_info.optimizer_status.value if hasattr(col_info.optimizer_status, 'value') else str(col_info.optimizer_status),
+                        'vectors_count': col_info.vectors_count,
+                        'indexed_vectors_count': col_info.indexed_vectors_count,
+                        'points_count': col_info.points_count,
+                        'segments_count': col_info.segments_count,
+                        'config': config,
+                        'payload_schema': col_info.payload_schema
+                    })
+                except Exception as e:
+                    logger.error(f"컬렉션 {col.name} 정보 조회 실패: {e}")
+            return infos
         except Exception as e:
-            logger.error(f"컬렉션 정보 조회 실패: {e}")
-            return {}
+            logger.error(f"전체 컬렉션 정보 조회 실패: {e}")
+            return []
+        
     
     def delete_document(self, document_id: str) -> bool:
         """
@@ -392,14 +400,19 @@ class QdrantManager:
             if not self.connect():
                 return {}
         try:
+            from qdrant_client.models import Filter, FieldCondition, MatchValue
+            filter_obj = Filter(
+                must=[
+                    FieldCondition(
+                        key="document_id",
+                        match=MatchValue(value=document_id)
+                    )
+                ]
+            )
             points, _ = self.client.scroll(
                 collection_name=self.collection_name,
                 limit=1,
-                filter={
-                    "must": [
-                        {"key": "document_id", "match": {"value": document_id}}
-                    ]
-                }
+                filter=filter_obj
             )
             if points:
                 return points[0].payload.get("metadata", points[0].payload)

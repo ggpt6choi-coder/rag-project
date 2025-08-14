@@ -4,6 +4,28 @@ from .qdrant_manager import QdrantManager
 from .embedding_service import EmbeddingService
 
 class SearchService:
+    def search_hybrid(self, query: str, keyword: str = None, limit: int = 10, score_threshold: float = 0.0, document_id: str = None, page_number: int = None) -> List[Dict[str, Any]]:
+        """
+        벡터+키워드 하이브리드 검색
+        Args:
+            query: 검색 쿼리(임베딩)
+            keyword: 키워드(문자열 포함 필터)
+            limit: 반환할 결과 수
+            score_threshold: 점수 임계값
+            document_id: 특정 문서로 제한
+            page_number: 특정 페이지로 제한
+        Returns:
+            검색 결과 리스트
+        """
+        # 1. 벡터 검색
+        vector_results = self.search(query, limit=limit*2, score_threshold=score_threshold, document_id=document_id, page_number=page_number)
+        # 2. 키워드 필터링
+        if keyword:
+            keyword_results = [r for r in vector_results if keyword in r['text']]
+            # 키워드 결과가 있으면 우선 반환, 없으면 벡터 결과 상위 limit개 반환
+            return keyword_results[:limit] if keyword_results else vector_results[:limit]
+        else:
+            return vector_results[:limit]
     """검색 서비스 클래스"""
     
     def __init__(self, qdrant_manager: QdrantManager = None, embedding_service: EmbeddingService = None):

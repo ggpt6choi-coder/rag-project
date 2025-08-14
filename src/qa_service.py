@@ -8,8 +8,10 @@ import json
 from typing import List, Dict, Any, Optional
 from loguru import logger
 from src.config import config
+
 from src.search_service import SearchService
 from src.embedding_service import EmbeddingService
+from src.qdrant_manager import QdrantManager
 
 
 class QAService:
@@ -58,36 +60,81 @@ class QAService:
             return "죄송합니다. 답변을 생성하는 중 오류가 발생했습니다."
     
     def _build_prompt(self, query: str, context: List[str]) -> str:
-        """RAG 프롬프트 구성 - 최적화된 버전"""
-        context_text = "\n\n".join(context)
-        
-        prompt = f"""다음은 문서에서 검색된 관련 내용입니다:
-
-{context_text}
-
-위의 내용을 바탕으로 다음 질문에 간결하고 정확하게 답변해주세요.
-답변은 한국어로 작성하고, 문서에 있는 정보만을 사용하세요.
-
-질문: {query}
-
-답변:"""
-        
+        """RAG 프롬프트 구성 - 상황별 최적화 버전 (표/리스트/근거/출처 등)"""
+        import re
+        filtered_context = []
+        context_types = []
+        # 표/리스트/일반 텍스트 구분 및 필터링
+        for block in context:
+            lines = [l.strip() for l in block.splitlines() if l.strip()]
+            if not lines:
+                context_types.append("text")
+                filtered_context.append(block)
+                continue
+            if lines[0].startswith("|") and lines[0].endswith("|"):
+                context_types.append("table")
+                filtered_context.append(block)
+            elif all(l.startswith("-") or l[0].isdigit() for l in lines):
+                context_types.append("list")
+                filtered_context.append(block)
+            else:
+                context_types.append("text")
+                filtered_context.append(block)
+        # 예시: '진학수 40명 이상' 패턴 감지 및 표 필터링
+        m = re.search(r"([가-힣A-Za-z0-9_]+)\s*([0-9]+)명\s*이상", query)
+        if m:
+            col_name = m.group(1)
+            min_val = int(m.group(2))
+            new_context = []
+            for block, ctype in zip(filtered_context, context_types):
+                if ctype != "table":
+                    new_context.append(block)
+                    continue
+                lines = [l.strip() for l in block.splitlines() if l.strip()]
+                header = [h.strip() for h in lines[0].strip("|").split("|")]
+                try:
+                    col_idx = header.index(col_name)
+                except ValueError:
+                    new_context.append(block)
+                    continue
+                filtered_rows = [lines[0]]
+                for row in lines[1:]:
+                    cells = [c.strip() for c in row.strip("|").split("|")]
+                    try:
+                        if int(cells[col_idx]) >= min_val:
+                            filtered_rows.append(row)
+                    except:
+                        continue
+                if len(filtered_rows) > 1:
+                    new_context.append("\n".join(filtered_rows))
+            filtered_context = new_context
+        # 상황별 프롬프트 분기
+        context_text = "\n\n".join(filtered_context)
+        # 표/리스트/일반 텍스트가 혼합된 경우 안내문 추가
+        if any(t == "table" for t in context_types):
+            style_guide = "표가 포함된 경우 마크다운 표 형식으로, 리스트는 번호 또는 기호로, 일반 텍스트는 자연스럽게 요약해 주세요. 답변에는 반드시 관련 근거(출처, 문서명, 시트명, 행/열, 페이지 등)를 명확히 표기하세요."
+        elif any(t == "list" for t in context_types):
+            style_guide = "리스트는 번호 또는 기호로, 일반 텍스트는 자연스럽게 요약해 주세요. 답변에는 반드시 관련 근거(출처, 문서명, 시트명, 행/열, 페이지 등)를 명확히 표기하세요."
+        else:
+            style_guide = "답변에는 반드시 관련 근거(출처, 문서명, 시트명, 행/열, 페이지 등)를 명확히 표기하세요."
+        prompt = f"""아래 참고 내용을 바탕으로 질문에 대해 자연스럽고 친근하게 답변해 주세요. {style_guide}\n\n참고 내용:\n{context_text}\n\n질문: {query}\n답변:"""
         return prompt
     
     def ask_question(self, question: str, collection_name: str = "pdf_documents", 
-                    max_results: int = 5, max_tokens: int = 500) -> Dict[str, Any]:
-        """질문에 대한 답변 생성"""
+                    max_results: int = 5, max_tokens: int = 500, document_id: str = None) -> Dict[str, Any]:
+        """질문에 대한 답변 생성 (출처/근거 정보 포함)"""
         try:
             logger.info(f"질문 처리 시작: {question}")
-            
             # 1. 관련 문서 검색
-            search_results = self.search_service.search(
+            search_service = self.search_service
+            if collection_name:
+                search_service = SearchService(QdrantManager(collection_name=collection_name), self.embedding_service)
+            search_results = search_service.search(
                 query=question,
-                limit=max_results
+                limit=max_results,
+                document_id=document_id
             )
-            
             logger.info(f"검색 결과: {len(search_results)}개")
-            
             if not search_results:
                 logger.warning(f"검색 결과 없음: {question}")
                 return {
@@ -96,25 +143,44 @@ class QAService:
                     "sources": [],
                     "search_results": []
                 }
-            
-            # 2. 검색된 텍스트 추출
+            # 2. 검색된 텍스트 추출 및 출처 메타데이터 수집
             context_texts = []
             sources = []
-            
             for result in search_results:
                 text = result.get("text", "")
                 if text:
                     context_texts.append(text)
-                    sources.append({
-                        "id": result.get("id"),
-                        "score": result.get("score"),
-                        "document_id": result.get("document_id"),
-                        "chunk_index": result.get("chunk_index")
-                    })
-            
+                    meta_dict = {}
+                    for k in ["document_id", "title", "sheet", "row", "page_number", "chunk_index"]:
+                        if "metadata" in result and k in result["metadata"]:
+                            meta_dict[k] = result["metadata"][k]
+                        elif k in result:
+                            meta_dict[k] = result[k]
+                    if meta_dict:
+                        sources.append(meta_dict)
             # 3. LLM을 사용한 답변 생성
             answer = self.generate_answer(question, context_texts, max_tokens)
-            
+            # 4. 답변에 출처 추가 (자연어 근거)
+            if sources:
+                readable_sources = []
+                for i, src in enumerate(sources):
+                    # 해당 청크의 텍스트 일부 추출
+                    chunk_text = search_results[i].get("text", "")
+                    chunk_preview = chunk_text.strip().replace("\n", " ")[:80] + ("..." if len(chunk_text) > 80 else "")
+                    doc_name = src.get("title") or src.get("document_id", "문서")
+                    page = src.get("page_number")
+                    sheet = src.get("sheet")
+                    # 자연어 근거 문장 생성
+                    meta_parts = []
+                    if doc_name:
+                        meta_parts.append(f"문서: {doc_name}")
+                    if sheet:
+                        meta_parts.append(f"시트: {sheet}")
+                    if page is not None:
+                        meta_parts.append(f"페이지: {page}")
+                    readable = f"- \"{chunk_preview}\" ({', '.join(meta_parts)})"
+                    readable_sources.append(readable)
+                answer += f"\n\n📄 관련 출처:\n" + "\n".join(readable_sources)
             return {
                 "question": question,
                 "answer": answer,
@@ -122,7 +188,6 @@ class QAService:
                 "search_results": search_results,
                 "context_count": len(context_texts)
             }
-            
         except Exception as e:
             logger.error(f"질문 처리 중 오류: {e}")
             return {
@@ -133,11 +198,11 @@ class QAService:
                 "error": str(e)
             }
     
-    def ask_with_metadata(self, question: str, collection_name: str = "pdf_documents") -> Dict[str, Any]:
+    def ask_with_metadata(self, question: str, collection_name: str = "pdf_documents", max_results: int = 5, max_tokens: int = 500, document_id: str = None) -> Dict[str, Any]:
         """메타데이터를 포함한 상세한 질문 처리"""
         try:
             # 기본 질문 처리
-            result = self.ask_question(question, collection_name)
+            result = self.ask_question(question, collection_name, max_results=max_results, max_tokens=max_tokens, document_id=document_id)
             
             # 추가 메타데이터 분석
             if result.get("search_results"):

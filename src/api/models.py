@@ -1,6 +1,24 @@
 from typing import List, Dict, Any, Optional
 from pydantic import BaseModel, Field
 from datetime import datetime
+# Q&A 답변 피드백/수정 요청 모델
+class FeedbackRequest(BaseModel):
+    question: str = Field(..., description="질문")
+    answer: str = Field(..., description="기존 답변")
+    feedback_type: str = Field(..., description="피드백 유형 (정확성, 추가설명, 스타일, 기타)")
+    feedback_detail: Optional[str] = Field(None, description="상세 피드백/수정 요청 내용")
+    user_id: Optional[str] = Field(None, description="사용자 ID (선택)")
+    timestamp: Optional[datetime] = Field(default_factory=datetime.utcnow, description="피드백 시각")
+
+# Q&A 답변 피드백/수정 응답 모델
+class FeedbackResponse(BaseModel):
+    status: str = Field(..., description="처리 상태")
+    message: str = Field(..., description="처리 메시지")
+    feedback_id: Optional[str] = Field(None, description="피드백 ID")
+from typing import List, Dict, Any, Optional
+from pydantic import BaseModel, Field
+from datetime import datetime
+
 
 class PDFUploadRequest(BaseModel):
     """PDF 업로드 요청 모델"""
@@ -65,6 +83,26 @@ class CollectionInfo(BaseModel):
     segments_count: int = Field(..., description="세그먼트 수")
     config: Dict[str, Any] = Field(..., description="설정 정보")
 
+    class Config:
+        extra = "allow"
+        arbitrary_types_allowed = True
+
+
+# Q&A 답변 피드백/수정 요청 모델
+class FeedbackRequest(BaseModel):
+    question: str = Field(..., description="질문")
+    answer: str = Field(..., description="기존 답변")
+    feedback_type: str = Field(..., description="피드백 유형 (정확성, 추가설명, 스타일, 기타)")
+    feedback_detail: Optional[str] = Field(None, description="상세 피드백/수정 요청 내용")
+    user_id: Optional[str] = Field(None, description="사용자 ID (선택)")
+    timestamp: Optional[datetime] = Field(default_factory=datetime.utcnow, description="피드백 시각")
+
+# Q&A 답변 피드백/수정 응답 모델
+class FeedbackResponse(BaseModel):
+    status: str = Field(..., description="처리 상태")
+    message: str = Field(..., description="처리 메시지")
+    feedback_id: Optional[str] = Field(None, description="피드백 ID")
+
 class DeleteDocumentResponse(BaseModel):
     """문서 삭제 응답 모델"""
     document_id: str = Field(..., description="삭제된 문서 ID")
@@ -92,6 +130,7 @@ class QARequest(BaseModel):
     max_tokens: int = Field(default=500, description="생성할 최대 토큰 수")
     include_metadata: bool = Field(default=False, description="메타데이터 포함 여부")
     document_id: str = Field(default=None, description="검색할 문서의 document_id (선택)")
+    collection_name: str = Field(default=None, description="검색할 Qdrant 컬렉션명 (선택)")
 
 class QAResponse(BaseModel):
     """Q&A 응답 모델"""

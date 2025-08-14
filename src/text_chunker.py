@@ -35,32 +35,53 @@ class TextChunker:
         Returns:
             청크 리스트 (각 청크는 텍스트와 메타데이터 포함)
         """
-        if not text or not text.strip():
-            logger.warning("빈 텍스트가 제공되었습니다")
+        if not text or not isinstance(text, str):
             return []
-        
-        try:
-            # 텍스트 분할
-            chunks = self.text_splitter.split_text(text)
-            
-            # 청크에 메타데이터 추가
-            chunk_data = []
-            for i, chunk in enumerate(chunks):
-                if chunk.strip():  # 빈 청크 제외
-                    chunk_data.append({
-                        'text': chunk.strip(),
-                        'chunk_index': i,
-                        'chunk_size': len(chunk),
-                        'start_char': text.find(chunk),
-                        'end_char': text.find(chunk) + len(chunk)
+        # 표/리스트/문단 등 구조별로 우선 분리
+        blocks = []
+        cur = []
+        for line in text.splitlines():
+            if line.strip().startswith("|") and line.strip().endswith("|"):
+                if cur:
+                    blocks.append("\n".join(cur))
+                    cur = []
+                blocks.append(line)
+            elif line.strip() == "":
+                if cur:
+                    blocks.append("\n".join(cur))
+                    cur = []
+            else:
+                cur.append(line)
+        if cur:
+            blocks.append("\n".join(cur))
+        # 각 블록을 chunk_size 기준으로 분할, 너무 짧은 블록은 인접 블록과 합침
+        min_chunk = max(100, 500 // 5)
+        merged = []
+        buf = ""
+        for block in blocks:
+            if len(block) < min_chunk:
+                buf += ("\n" if buf else "") + block
+                if len(buf) >= min_chunk:
+                    merged.append(buf)
+                    buf = ""
+            else:
+                if buf:
+                    merged.append(buf)
+                    buf = ""
+                merged.append(block)
+        if buf:
+            merged.append(buf)
+        # 최종 청크 분할
+        chunks = []
+        for block in merged:
+            for i in range(0, len(block), 500 - 50):
+                chunk = block[i:i+500]
+                if chunk.strip():
+                    chunks.append({
+                        'text': chunk,
+                        'chunk_size': len(chunk)
                     })
-            
-            logger.info(f"텍스트를 {len(chunk_data)}개의 청크로 분할했습니다")
-            return chunk_data
-            
-        except Exception as e:
-            logger.error(f"텍스트 청킹 중 오류 발생: {e}")
-            raise
+        return chunks
     
     def chunk_text_by_pages(self, pages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
@@ -95,20 +116,24 @@ class TextChunker:
     def chunk_text_with_metadata(self, text: str, metadata: Dict[str, Any]) -> List[Dict[str, Any]]:
         """
         메타데이터와 함께 텍스트를 청킹합니다.
-        
         Args:
             text: 분할할 텍스트
-            metadata: 메타데이터
-            
+            metadata: 메타데이터 (문서명, 시트명, 행/열, 업로드 일시 등 포함)
         Returns:
             청크 리스트 (메타데이터 포함)
         """
         chunks = self.chunk_text(text)
-        
-        # 각 청크에 메타데이터 추가
+        # 메타데이터 확장: 기본 필드 외에도 시트명, 행/열, 업로드 일시 등 유연하게 포함
+        base_metadata = metadata.copy() if metadata else {}
+        # 예시: 문서명, 시트명, 행, 열, 업로드 일시 등 기본 필드 보장
+        base_metadata.setdefault('document_name', metadata.get('document_name') if metadata else None)
+        base_metadata.setdefault('sheet_name', metadata.get('sheet_name') if metadata else None)
+        base_metadata.setdefault('row', metadata.get('row') if metadata else None)
+        base_metadata.setdefault('column', metadata.get('column') if metadata else None)
+        base_metadata.setdefault('uploaded_at', metadata.get('uploaded_at') if metadata else None)
+        # 각 청크에 메타데이터 추가 (필요시 블록별 추가 정보도 병합)
         for chunk in chunks:
-            chunk['metadata'] = metadata.copy()
-        
+            chunk['metadata'] = base_metadata.copy()
         return chunks
     
     def get_chunk_statistics(self, chunks: List[Dict[str, Any]]) -> Dict[str, Any]:
