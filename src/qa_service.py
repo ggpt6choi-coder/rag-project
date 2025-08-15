@@ -121,7 +121,7 @@ class QAService:
         return prompt
     
     def ask_question(self, question: str, collection_name: str = "pdf_documents", 
-                    max_results: int = 5, max_tokens: int = 500, document_id: str = None) -> Dict[str, Any]:
+                    max_results: int = 5, max_tokens: int = 500, document_id: str = None, history=None) -> Dict[str, Any]:
         """질문에 대한 답변 생성 (출처/근거 정보 포함)"""
         try:
             logger.info(f"질문 처리 시작: {question}")
