@@ -1,3 +1,4 @@
+from .upload_progress import ProgressTracker, get_progress
 import os
 import time
 import uuid
@@ -20,8 +21,14 @@ from ..search_service import SearchService
 from ..config import config
 from src.qa_service import QAService
 
+
 # 라우터 생성
 router = APIRouter()
+
+# 업로드/벡터 적재 진행상태 조회 API (router 선언 이후로 이동)
+@router.get("/upload-progress/{task_id}")
+async def upload_progress(task_id: str):
+    return get_progress(task_id)
 
 @router.post("/qa/feedback", response_model=FeedbackResponse, summary="Q&A 답변 피드백/수정 요청")
 async def submit_feedback(request: FeedbackRequest):
@@ -103,66 +110,93 @@ async def upload_file(
     try:
         os.makedirs(config.UPLOAD_DIR, exist_ok=True)
         file_path = os.path.join(config.UPLOAD_DIR, f"{uuid.uuid4()}_{file.filename}")
+        content = await file.read()
         with open(file_path, "wb") as buffer:
-            content = await file.read()
             buffer.write(content)
         name, ext = os.path.splitext(file.filename)
         if not ext:
             raise HTTPException(status_code=400, detail="파일 확장자가 없는 파일은 지원하지 않습니다.")
         # 백그라운드 작업 등록
         task_id = str(uuid.uuid4())
+        tracker = ProgressTracker(task_id)
+        tracker.set_progress(10, "파일 업로드 완료, 처리 대기 중")
         def process_file_task():
             try:
+                tracker.set_progress(20, "텍스트/청크 추출 중...")
                 processor = get_processor(file_path)
-                extracted = processor.extract_text(file_path)
-                if isinstance(extracted, dict):
-                    text = extracted.get('text', '')
-                    if ext.lower() == '.pdf':
-                        metadata = extracted.get('metadata', {})
-                        metadata['title'] = file.filename
-                        metadata['file_type'] = ext.lower()
+                if ext.lower() == '.xlsx':
+                    # 엑셀은 extract_chunks로 질문/답변 분리 청크 추출
+                    chunks = processor.extract_chunks(file_path, department=collection_name)
+                    tracker.set_progress(40, f"엑셀 청크 {len(chunks)}개 추출 완료, 임베딩 중...")
+                    if not chunks:
+                        tracker.set_error("엑셀 청크 추출 실패")
+                        logger.error(f"[백그라운드] 엑셀 청크 추출 실패: {file.filename}")
+                        return
+                else:
+                    # 그 외 파일은 기존 방식
+                    extracted = processor.extract_text(file_path)
+                    if isinstance(extracted, dict):
+                        text = extracted.get('text', '')
+                        if ext.lower() == '.pdf':
+                            metadata = extracted.get('metadata', {})
+                            metadata['title'] = file.filename
+                            metadata['file_type'] = ext.lower()
+                        else:
+                            metadata = {
+                                'title': file.filename,
+                                'file_type': ext.lower(),
+                            }
                     else:
+                        text = extracted
                         metadata = {
                             'title': file.filename,
                             'file_type': ext.lower(),
                         }
-                else:
-                    text = extracted
-                    metadata = {
-                        'title': file.filename,
-                        'file_type': ext.lower(),
-                    }
-                logger.info(f"[OCR 추출 결과] 파일명: {file.filename}\n{text}")
-                if not text or not isinstance(text, str) or not text.strip():
-                    logger.error(f"[백그라운드] 텍스트 추출 실패: {file.filename}")
-                    return
-                if ext.lower() == '.xlsx':
-                    sample = text[:1000]
-                    logger.info(f"[엑셀 구조 요약 프롬프트] 예시:\n아래는 업로드된 엑셀의 구조 일부입니다. 시트명, 표 구조, 헤더, 데이터 등을 요약/설명해 주세요.\n---\n{sample}\n---")
-                chunks = text_chunker.chunk_text(text)
-                if not chunks:
-                    logger.error(f"[백그라운드] 청크 생성 실패: {file.filename}")
-                    return
+                    logger.info(f"[OCR 추출 결과] 파일명: {file.filename}\n{text}")
+                    if not text or not isinstance(text, str) or not text.strip():
+                        tracker.set_error("텍스트 추출 실패")
+                        logger.error(f"[백그라운드] 텍스트 추출 실패: {file.filename}")
+                        return
+                    chunks = text_chunker.chunk_text(text)
+                    tracker.set_progress(40, f"청크 {len(chunks)}개 생성 완료, 임베딩 중...")
+                    if not chunks:
+                        tracker.set_error("청크 생성 실패")
+                        logger.error(f"[백그라운드] 청크 생성 실패: {file.filename}")
+                        return
                 embedded_chunks = embedding_service.embed_chunks(chunks)
+                tracker.set_progress(80, "임베딩 완료, 벡터 DB 적재 중...")
                 if not embedded_chunks:
+                    tracker.set_error("임베딩 생성 실패")
                     logger.error(f"[백그라운드] 임베딩 생성 실패: {file.filename}")
                     return
-                for chunk in embedded_chunks:
-                    chunk['metadata'] = metadata
-                doc_id = document_id if document_id else str(uuid.uuid4())
+                # 엑셀은 이미 청크별 메타데이터 포함, 그 외는 일괄 메타데이터 부여
+                if ext.lower() != '.xlsx':
+                    for chunk in embedded_chunks:
+                        chunk['metadata'] = metadata
+                if document_id:
+                    doc_id = document_id
+                else:
+                    today = time.strftime('%Y%m%d')
+                    dept = collection_name if collection_name else 'unknown'
+                    base_filename = os.path.basename(file.filename)
+                    doc_id = f"{today}_{dept}_{base_filename}"
                 qdrant_mgr = QdrantManager(collection_name=collection_name) if collection_name else QdrantManager()
                 success = qdrant_mgr.store_vectors(embedded_chunks, doc_id)
                 if not success:
+                    tracker.set_error("벡터 저장 실패")
                     logger.error(f"[백그라운드] 벡터 저장 실패: {file.filename}")
+                    return
+                tracker.set_progress(100, "업로드 및 벡터 적재 완료")
                 logger.info(f"[백그라운드] 파일 처리 완료: {file.filename}")
             except Exception as e:
+                tracker.set_error(f"파일 처리 중 오류: {e}")
                 logger.error(f"[백그라운드] 파일 처리 중 오류: {e}")
         background_tasks.add_task(process_file_task)
         processing_time = time.time() - start_time
         return PDFUploadResponse(
             document_id=task_id,
             status="processing",
-            message="파일 업로드 완료, 백그라운드에서 처리 중입니다.",
+            message="파일 업로드 완료, 벡터 DB 적재까지 진행상태를 추적합니다.",
             chunks_count=0,
             processing_time=processing_time,
             metadata={"filename": file.filename, "file_type": ext.lower()}

@@ -16,26 +16,45 @@ async function uploadFile({ file, collectionName }) {
 export default function FileUpload({ collectionName, onSuccess, disabled, small }) {
   const inputRef = useRef();
   const [uploading, setUploading] = useState(false);
+  const [done, setDone] = useState(false);
+  const [error, setError] = useState(null);
+  const pollRef = useRef();
+  const failCountRef = useRef(0);
+
   const mutation = useMutation(uploadFile, {
     onSuccess: (data) => {
-      onSuccess && onSuccess('새로운 데이터가 추가되었습니다');
-      setUploading(false);
+      if (data && data.document_id) {
+        setUploading(false);
+        setDone(true);
+        onSuccess && onSuccess('파일 업로드가 완료되었습니다');
+        setTimeout(() => setDone(false), 1500);
+      } else {
+        setUploading(false);
+        setError('업로드 응답 오류');
+      }
     },
     onError: () => {
       alert('업로드 실패');
       setUploading(false);
+      setError('업로드 실패');
     },
   });
+
+  // 진행상태 폴링 제거: 업로드 성공만 체크
+
+  // 진행률 폴링 및 바 제거: 단순 완료 알림만 표시
 
   const handleFileChange = (e) => {
     const file = e.target.files[0];
     if (!file) return;
     setUploading(true);
+    setDone(false);
+    setError(null);
     mutation.mutate({ file, collectionName });
   };
 
   return (
-    <div style={{ position: 'relative', display: 'flex', alignItems: 'center', height: small ? 32 : 44 }}>
+    <div style={{ position: 'relative', display: 'flex', alignItems: 'center', height: small ? 32 : 44, flexDirection: 'column', width: '100%' }}>
       <label
         style={{
           display: 'flex',
@@ -60,7 +79,12 @@ export default function FileUpload({ collectionName, onSuccess, disabled, small 
         htmlFor="file-upload-input"
       >
         <span style={{ fontSize: small ? 15 : 18, marginRight: 4 }}>📎</span>
-        {uploading ? '업로드 중...' : '파일 업로드'}
+        {uploading ? (
+          <>
+            <span>업로드 중...</span>
+            <span className="spinner" style={{ marginLeft: 8, width: 16, height: 16, border: '2px solid #fff', borderTop: '2px solid #1976d2', borderRadius: '50%', display: 'inline-block', animation: 'spin 1s linear infinite', verticalAlign: 'middle' }} />
+          </>
+        ) : done ? '업로드 완료' : '파일 업로드'}
         <input
           id="file-upload-input"
           ref={inputRef}
@@ -70,6 +94,15 @@ export default function FileUpload({ collectionName, onSuccess, disabled, small 
           disabled={uploading || disabled}
         />
       </label>
+      {error && (
+        <div style={{ width: '100%', marginTop: 6, fontSize: 13, color: '#d32f2f', minHeight: 18 }}>{error}</div>
+      )}
+      <style>{`
+        @keyframes spin {
+          0% { transform: rotate(0deg); }
+          100% { transform: rotate(360deg); }
+        }
+      `}</style>
     </div>
   );
 }

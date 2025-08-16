@@ -1,8 +1,9 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useImperativeHandle, forwardRef } from 'react';
 import useChatStorage from '../hooks/useChatStorage';
 import useLoadingStorage from '../hooks/useLoadingStorage';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import FileUpload from './FileUpload';
 
 // 어떤 형태든 string으로 변환 (React child 에러 완전 방지)
 function toSafeMarkdownString(content) {
@@ -28,7 +29,8 @@ function flattenChildren(children) {
   return '';
 }
 
-export default function ChatPanel({ collectionName }) {
+
+const ChatPanel = forwardRef(function ChatPanel({ collectionName, onUploadSuccess }, ref) {
   const [input, setInput] = useState('');
   const [messages, setMessages] = useChatStorage(collectionName);
   const [loading, setLoading] = useLoadingStorage(collectionName);
@@ -36,6 +38,10 @@ export default function ChatPanel({ collectionName }) {
   const messagesEndRef = useRef(null);
   const abortControllerRef = useRef(null);
 
+  // 외부에서 messages를 비우는 함수 제공
+  useImperativeHandle(ref, () => ({
+    clearMessages: () => setMessages([])
+  }), [setMessages]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -142,12 +148,13 @@ export default function ChatPanel({ collectionName }) {
         minHeight: 0,
       }}
     >
+      {/* 부서별 파일 업로드 UI는 App.jsx에서 관리 */}
       {/* 메시지 영역 */}
       <div
         style={{
           flex: 1,
           overflowY: 'auto',
-          padding: '68px 0 28px 0', // 상단 패딩을 68px로 늘림
+          padding: '18px 0 28px 0',
           display: 'flex',
           flexDirection: 'column',
           gap: 22,
@@ -244,12 +251,22 @@ export default function ChatPanel({ collectionName }) {
                 </>
                 : toSafeMarkdownString(msg.content)
               }
-              {/* 날짜/시간을 말풍선 내부, 답변/출처 토글 아래에 위치 */}
-              <div style={{ fontSize: 13, color: '#bdbdbd', marginTop: 10, textAlign: msg.role === 'user' ? 'right' : 'left' }}>
-                {msg.timestamp ? formatKoreanDateTime(msg.timestamp) : ''}
-              </div>
+              {/* 시간/일시 표시는 말풍선 바깥 하단에 별도 표기 (아래쪽에 위치) */}
             </div>
             {/* 복사 버튼 (말풍선 바깥) */}
+            {/* 시간/일시 바깥 하단 표기 */}
+            <div style={{
+              fontSize: 13,
+              color: '#bdbdbd',
+              marginTop: 4,
+              marginBottom: 2,
+              textAlign: msg.role === 'user' ? 'right' : 'left',
+              width: '100%',
+              paddingLeft: msg.role === 'user' ? 0 : 36, // 말풍선 좌측 여백 보정
+              paddingRight: msg.role === 'user' ? 36 : 0 // 말풍선 우측 여백 보정
+            }}>
+              {msg.timestamp ? formatKoreanDateTime(msg.timestamp) : ''}
+            </div>
             <div style={{ display: 'flex', alignItems: 'flex-start', height: '100%', marginTop: 2 }}>
               <div style={{ position: 'relative' }}>
                 <button
@@ -472,4 +489,6 @@ export default function ChatPanel({ collectionName }) {
       `}</style>
     </div >
   );
-}
+});
+
+export default ChatPanel;

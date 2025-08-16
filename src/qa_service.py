@@ -24,12 +24,11 @@ class QAService:
         
         logger.info(f"Q&A 서비스 초기화: {self.llm_model}")
     
-    def generate_answer(self, query: str, context: List[str], max_tokens: int = 500) -> str:
-        """LLM을 사용하여 답변 생성"""
+    def generate_answer(self, query: str, context: List[str], max_tokens: int = 500, history: list = None) -> str:
+        """LLM을 사용하여 답변 생성 (이전 대화 history 반영)"""
         try:
             # 프롬프트 구성
-            prompt = self._build_prompt(query, context)
-            
+            prompt = self._build_prompt(query, context, history)
             # Ollama API 호출
             response = requests.post(
                 f"{self.ollama_host}/api/generate",
@@ -45,7 +44,6 @@ class QAService:
                 },
                 timeout=120
             )
-            
             if response.status_code == 200:
                 result = response.json()
                 answer = result.get("response", "").strip()
@@ -54,12 +52,11 @@ class QAService:
             else:
                 logger.error(f"LLM API 오류: {response.status_code}")
                 return "죄송합니다. 답변을 생성하는 중 오류가 발생했습니다."
-                
         except Exception as e:
             logger.error(f"답변 생성 중 오류: {e}")
             return "죄송합니다. 답변을 생성하는 중 오류가 발생했습니다."
     
-    def _build_prompt(self, query: str, context: List[str]) -> str:
+    def _build_prompt(self, query: str, context: List[str], history: list = None) -> str:
         """RAG 프롬프트 구성 - 상황별 최적화 버전 (표/리스트/근거/출처 등)"""
         import re
         filtered_context = []
@@ -108,16 +105,28 @@ class QAService:
                 if len(filtered_rows) > 1:
                     new_context.append("\n".join(filtered_rows))
             filtered_context = new_context
-        # 상황별 프롬프트 분기
+        # 상황별 프롬프트 분기 (자연스러운 상담원 스타일 강조)
         context_text = "\n\n".join(filtered_context)
-        # 표/리스트/일반 텍스트가 혼합된 경우 안내문 추가
-        if any(t == "table" for t in context_types):
-            style_guide = "표가 포함된 경우 마크다운 표 형식으로, 리스트는 번호 또는 기호로, 일반 텍스트는 자연스럽게 요약해 주세요. 답변에는 반드시 관련 근거(출처, 문서명, 시트명, 행/열, 페이지 등)를 명확히 표기하세요."
-        elif any(t == "list" for t in context_types):
-            style_guide = "리스트는 번호 또는 기호로, 일반 텍스트는 자연스럽게 요약해 주세요. 답변에는 반드시 관련 근거(출처, 문서명, 시트명, 행/열, 페이지 등)를 명확히 표기하세요."
-        else:
-            style_guide = "답변에는 반드시 관련 근거(출처, 문서명, 시트명, 행/열, 페이지 등)를 명확히 표기하세요."
-        prompt = f"""아래 참고 내용을 바탕으로 질문에 대해 자연스럽고 친근하게 답변해 주세요. {style_guide}\n\n참고 내용:\n{context_text}\n\n질문: {query}\n답변:"""
+        style_guide = (
+            "- 답변은 표/리스트/데이터 복사 느낌이 아니라, 실제 상담원이 안내하는 것처럼 자연스럽고 친근하게 작성해 주세요.\n"
+            "- 필요시 예시, 추가 설명도 포함해 주세요.\n"
+            "- 표가 포함된 경우 마크다운 표 형식으로, 리스트는 번호 또는 기호로, 일반 텍스트는 자연스럽게 요약해 주세요.\n"
+            "- 답변에는 반드시 관련 근거(출처, 문서명, 시트명, 행/열, 페이지 등)를 명확히 표기하세요."
+        )
+        # history(이전 대화)가 있으면 프롬프트 상단에 추가
+        history_text = ""
+        if history and isinstance(history, list) and len(history) > 0:
+            history_lines = []
+            for turn in history:
+                q = turn.get("question") or turn.get("content") or turn.get("user") or ""
+                a = turn.get("answer") or turn.get("response") or turn.get("assistant") or ""
+                if q:
+                    history_lines.append(f"이전 질문: {q}")
+                if a:
+                    history_lines.append(f"이전 답변: {a}")
+            if history_lines:
+                history_text = "\n".join(history_lines) + "\n"
+        prompt = f"""{history_text}아래 참고 내용을 바탕으로 사용자의 질문에 대해 자연스럽고 친근하게 답변해 주세요.\n{style_guide}\n\n[참고 내용]\n{context_text}\n\n[질문]\n{query}\n[답변]"""
         return prompt
     
     def ask_question(self, question: str, collection_name: str = "pdf_documents", 
@@ -159,7 +168,7 @@ class QAService:
                     if meta_dict:
                         sources.append(meta_dict)
             # 3. LLM을 사용한 답변 생성
-            answer = self.generate_answer(question, context_texts, max_tokens)
+            answer = self.generate_answer(question, context_texts, max_tokens, history)
             # 4. 답변에 출처 추가 (자연어 근거)
             if sources:
                 readable_sources = []
