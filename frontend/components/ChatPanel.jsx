@@ -1,17 +1,50 @@
 import React, { useState, useRef, useEffect } from 'react';
 import useChatStorage from '../hooks/useChatStorage';
+import useLoadingStorage from '../hooks/useLoadingStorage';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+
+// 어떤 형태든 string으로 변환 (React child 에러 완전 방지)
+function toSafeMarkdownString(content) {
+  if (typeof content === "string") return content;
+  if (typeof content === "number" || typeof content === "boolean") return String(content);
+  if (content === null || content === undefined) return "";
+  if (Array.isArray(content)) return content.map(toSafeMarkdownString).join(" ");
+  if (typeof content === "object" && content.$$typeof) return "[React Element]";
+  if (typeof content === "object") return JSON.stringify(content);
+  return "";
+}
+
+// ReactMarkdown 커스텀 컴포넌트 children flatten 방어
+function flattenChildren(children) {
+  if (typeof children === 'string' || typeof children === 'number' || typeof children === 'boolean') return String(children);
+  if (children === null || children === undefined) return '';
+  if (Array.isArray(children)) return children.map(flattenChildren).join('');
+  if (typeof children === 'object') {
+    if (children.props && children.props.children) return flattenChildren(children.props.children);
+    if (children.$$typeof) return '[React Element]';
+    return JSON.stringify(children);
+  }
+  return '';
+}
 
 export default function ChatPanel({ collectionName }) {
   const [input, setInput] = useState('');
   const [messages, setMessages] = useChatStorage(collectionName);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useLoadingStorage(collectionName);
   const [error, setError] = useState(null);
   const messagesEndRef = useRef(null);
   const abortControllerRef = useRef(null);
 
+
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
+
+  // 부서(팀) 대화방이 바뀔 때마다 입력창만 초기화 (loading은 부서별로 저장됨)
+  useEffect(() => {
+    setInput('');
+  }, [collectionName]);
 
   const handleSend = async () => {
     if (!input.trim() || !collectionName) return;
@@ -176,14 +209,52 @@ export default function ChatPanel({ collectionName }) {
                   🤖
                 </span>
               )}
-              {msg.content}
+              {msg.role === 'assistant'
+                ? <>
+                  <pre style={{ whiteSpace: 'pre-wrap', fontFamily: 'inherit', background: 'none', border: 'none', padding: 0, margin: 0 }}>
+                    {toSafeMarkdownString(msg.content)}
+                  </pre>
+                  {msg.sources && (
+                    <div style={{ marginTop: 8 }}>
+                      <button
+                        onClick={() => setOpenSourcesIdx(openSourcesIdx === i ? null : i)}
+                        style={{
+                          background: '#f7f8fa',
+                          border: '1px solid #e0e0e0',
+                          borderRadius: 8,
+                          fontSize: 13,
+                          color: '#1976d2',
+                          padding: '3px 14px',
+                          cursor: 'pointer',
+                          fontWeight: 600,
+                          marginTop: 2,
+                        }}
+                      >
+                        {openSourcesIdx === i ? '▲ 출처 닫기' : '▼ 관련 출처'}
+                      </button>
+                      {openSourcesIdx === i && (
+                        <div style={{ marginTop: 6, background: '#f7f8fa', borderRadius: 8, padding: 10, fontSize: 14, color: '#444', whiteSpace: 'pre-wrap' }}>
+                          {typeof msg.sources === 'string'
+                            ? msg.sources
+                            : JSON.stringify(msg.sources, null, 2)}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </>
+                : toSafeMarkdownString(msg.content)
+              }
+              {/* 날짜/시간을 말풍선 내부, 답변/출처 토글 아래에 위치 */}
+              <div style={{ fontSize: 13, color: '#bdbdbd', marginTop: 10, textAlign: msg.role === 'user' ? 'right' : 'left' }}>
+                {msg.timestamp ? formatKoreanDateTime(msg.timestamp) : ''}
+              </div>
             </div>
             {/* 복사 버튼 (말풍선 바깥) */}
             <div style={{ display: 'flex', alignItems: 'flex-start', height: '100%', marginTop: 2 }}>
               <div style={{ position: 'relative' }}>
                 <button
                   onClick={e => {
-                    navigator.clipboard.writeText(msg.content);
+                    navigator.clipboard.writeText(toSafeMarkdownString(msg.content));
                     // scale 애니메이션
                     const btn = e.currentTarget;
                     if (btn) {
@@ -237,19 +308,6 @@ export default function ChatPanel({ collectionName }) {
                   }}
                 >복사</span>
               </div>
-            </div>
-            <div
-              style={{
-                fontSize: 13,
-                color: '#bdbdbd',
-                marginTop: 2,
-                marginLeft: msg.role === 'user' ? 'auto' : 28,
-                marginRight: msg.role === 'user' ? 28 : 'auto',
-                textAlign: msg.role === 'user' ? 'right' : 'left',
-                maxWidth: '62%',
-              }}
-            >
-              {msg.timestamp ? formatKoreanDateTime(msg.timestamp) : ''}
             </div>
           </div>
         ))
@@ -400,6 +458,16 @@ export default function ChatPanel({ collectionName }) {
         @keyframes spin {
           0% { transform: rotate(0deg); }
           100% { transform: rotate(360deg); }
+        }
+        .markdown-body pre, .markdown-body code {
+          font-family: 'Menlo', 'Monaco', 'Consolas', 'Liberation Mono', 'Courier New', monospace;
+        }
+        .markdown-body table {
+          border-collapse: collapse;
+        }
+        .markdown-body th, .markdown-body td {
+          border: 1px solid #d0d7e2;
+          padding: 6px 10px;
         }
       `}</style>
     </div >

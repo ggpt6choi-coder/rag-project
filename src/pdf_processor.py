@@ -87,22 +87,33 @@ class WordProcessor(BaseFileProcessor):
 class ExcelProcessor(BaseFileProcessor):
     def extract_text(self, file_path: str) -> str:
         import openpyxl
-        wb = openpyxl.load_workbook(file_path)
+        import logging
+        wb = openpyxl.load_workbook(file_path, data_only=True)
         text_blocks = []
         for sheet in wb.worksheets:
-            rows = list(sheet.iter_rows(values_only=True))
-            if not rows or all([all(cell is None or str(cell).strip() == '' for cell in row) for row in rows]):
-                continue  # 빈 시트 skip
-            block = [f"[{sheet.title}]"]
-            # 헤더 추출 (첫 행)
-            header = rows[0]
-            header_text = " | ".join([str(cell) if cell is not None else "" for cell in header])
-            block.append(f"| {header_text} |")
-            # 데이터 행
-            for row in rows[1:]:
-                row_text = " | ".join([str(cell) if cell is not None else "" for cell in row])
-                block.append(f"| {row_text} |")
+            try:
+                rows = list(sheet.iter_rows(values_only=True))
+            except Exception as e:
+                logging.error(f"[ExcelProcessor] 시트 '{sheet.title}'에서 행을 읽는 중 오류: {e}")
+                continue
+            if not rows or all(row is None or all(cell is None for cell in (row or [])) for row in rows):
+                logging.warning(f"[ExcelProcessor] 시트 '{sheet.title}'가 비어 있거나 데이터가 없음.")
+                continue
+            header = rows[0] if rows and rows[0] else []
+            header_text = " | ".join([str(cell) if cell is not None else "" for cell in (header or [])])
+            block = [f"[{sheet.title}]", f"| {header_text} |"]
+            for row_idx, row in enumerate(rows[1:], start=2):
+                if row is None or all(cell is None for cell in (row or [])):
+                    continue
+                try:
+                    row_text = " | ".join([str(cell) if cell is not None else "" for cell in (row or [])])
+                    block.append(f"| {row_text} |")
+                except Exception as e:
+                    logging.error(f"[ExcelProcessor] 시트 '{sheet.title}'의 {row_idx}번째 행 처리 중 오류: {e}")
+                    continue
             text_blocks.append("\n".join(block))
+        if not text_blocks:
+            logging.warning(f"[ExcelProcessor] 파일 '{file_path}'에서 추출된 텍스트가 없음.")
         return "\n\n".join(text_blocks) if text_blocks else ""
 
 class PowerPointProcessor(BaseFileProcessor):
