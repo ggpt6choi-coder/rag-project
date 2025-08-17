@@ -11,6 +11,7 @@ const queryClient = new QueryClient();
 
 
 export default function App() {
+  const [ragOnly, setRagOnly] = useState(true); // true: RAG only, false: LLM 자유 답변
   const [selectedDept, setSelectedDept] = useState(null);
   const [toast, setToast] = useState(null);
   const [unreadAnswers, setUnreadAnswers] = useState({}); // {부서명: true/false}
@@ -57,7 +58,7 @@ export default function App() {
           background: '#ececf1',
         }}
       >
-        {/* 좌측: chatGPT 스타일 사이드바 */}
+        {/* 사이드바: RAG 스위치 + 부서선택 + DepartmentList (중복 제거) */}
         <aside
           style={{
             width: 260,
@@ -73,7 +74,47 @@ export default function App() {
             minHeight: 0,
           }}
         >
-          <div style={{ fontWeight: 700, fontSize: 22, padding: '28px 0 18px 32px', letterSpacing: 1, color: '#fff', borderBottom: '1px solid #2a2b32' }}>부서 선택</div>
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 12,
+            padding: '22px 0 8px 32px',
+            userSelect: 'none',
+          }}>
+            <span style={{ fontWeight: 600, fontSize: 15, color: '#1976d2' }}>RAG 모드</span>
+            <div
+              style={{
+                width: 44,
+                height: 24,
+                borderRadius: 16,
+                background: ragOnly ? 'linear-gradient(90deg,#1976d2 60%,#42a5f5 100%)' : '#bdbdbd',
+                position: 'relative',
+                cursor: 'pointer',
+                transition: 'background 0.2s',
+                marginRight: 2,
+              }}
+              onClick={() => setRagOnly(v => !v)}
+              role="button"
+              aria-checked={ragOnly}
+              tabIndex={0}
+            >
+              <div style={{
+                position: 'absolute',
+                top: 2,
+                left: ragOnly ? 22 : 2,
+                width: 20,
+                height: 20,
+                borderRadius: '50%',
+                background: '#fff',
+                boxShadow: '0 1px 4px rgba(0,0,0,0.10)',
+                transition: 'left 0.2s',
+              }} />
+            </div>
+            <span style={{ fontSize: 14, color: ragOnly ? '#1976d2' : '#888', minWidth: 32 }}>
+              {ragOnly ? 'ON' : 'OFF'}
+            </span>
+          </div>
+          <div style={{ fontWeight: 700, fontSize: 22, padding: '10px 0 18px 32px', letterSpacing: 1, color: '#fff' }}>부서 선택</div>
           <DepartmentList selected={selectedDept} onSelect={handleDeptSelect} unreadAnswers={unreadAnswers} />
         </aside>
         {/* 우측: chatGPT 스타일 대화창 */}
@@ -181,6 +222,7 @@ export default function App() {
               loading={selectedDept ? (chatStates[selectedDept]?.loading || false) : false}
               setMessages={(updater) => selectedDept && setMessages(selectedDept, updater)}
               setLoading={(value) => selectedDept && setLoading(selectedDept, value)}
+              ragOnly={ragOnly}
               onAnswerToOtherDept={(dept, answerObj) => {
                 // 답변 도착한 부서에 답변 추가 및 로딩 해제, 알림 뱃지
                 setMessages(dept, prev => [

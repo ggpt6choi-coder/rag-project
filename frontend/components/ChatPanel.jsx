@@ -29,7 +29,7 @@ function flattenChildren(children) {
 
 
 
-const ChatPanel = forwardRef(function ChatPanel({ collectionName, messages, loading, setMessages, setLoading, onAnswerToOtherDept }, ref) {
+const ChatPanel = forwardRef(function ChatPanel({ collectionName, messages, loading, setMessages, setLoading, ragOnly, onAnswerToOtherDept }, ref) {
   const [input, setInput] = useState('');
   const [error, setError] = useState(null);
   const messagesEndRef = useRef(null);
@@ -74,6 +74,7 @@ const ChatPanel = forwardRef(function ChatPanel({ collectionName, messages, load
           question: input,
           collection_name: collectionName,
           history: messages,
+          rag_only: ragOnly,
         }),
         signal: controller.signal,
       });
