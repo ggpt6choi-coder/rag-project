@@ -33,27 +33,42 @@ class PDFProcessor(BaseFileProcessor):
         return "\n".join(text)
 
     def extract_chunks(self, file_path: str, department: str = None) -> list:
+        """
+        PDF 전체 텍스트를 추출한 뒤, semantic-text-splitter를 활용해 의미 단위로 분할합니다.
+        """
         import pdfplumber
-        chunks = []
         filename = os.path.basename(file_path)
+        # 1. PDF 전체 텍스트 추출
+        all_text = []
         with pdfplumber.open(file_path) as pdf:
-            for page_num, page in enumerate(pdf.pages, 1):
+            for page in pdf.pages:
                 page_text = page.extract_text() or ""
                 # 헤더/푸터/목차 등 제거 (간단 예시)
                 lines = [l for l in page_text.split('\n') if not re.match(r'^(목차|Page|페이지|Copyright|All rights reserved)', l.strip())]
                 page_text_clean = '\n'.join(lines)
-                # 문단 단위로 쪼개기 (빈 줄 기준)
-                paragraphs = [p.strip() for p in re.split(r'\n\s*\n', page_text_clean) if p.strip()]
-                for para in paragraphs:
-                    for i in range(0, len(para), 1000):
-                        chunk = para[i:i+1000]
-                        meta = {
-                            "type": "pdf",
-                            "filename": filename,
-                            "page": page_num,
-                            "department": department
-                        }
-                        chunks.append({"text": chunk, "metadata": meta})
+                all_text.append(page_text_clean)
+        full_text = '\n'.join(all_text)
+
+        # 2. semantic-text-splitter로 의미 단위 분할
+        try:
+            from semantic_text_splitter import split_text
+        except ImportError:
+            raise ImportError("semantic-text-splitter 패키지가 설치되어 있지 않습니다. 'pip install semantic-text-splitter'로 설치하세요.")
+
+        # split_text 함수는 텍스트를 의미 단위로 분할하여 리스트로 반환합니다.
+        # 기본적으로 bge-m3 임베딩을 사용하며, 옵션 조정 가능
+        semantic_chunks = split_text(full_text, model_name="bge-m3", chunk_size=1000, overlap=100)
+
+        # 3. chunk별 메타데이터 부여 및 반환
+        chunks = []
+        for idx, chunk in enumerate(semantic_chunks, 1):
+            meta = {
+                "type": "pdf",
+                "filename": filename,
+                "chunk": idx,
+                "department": department
+            }
+            chunks.append({"text": chunk, "metadata": meta})
         return chunks
 
 class ExcelProcessor(BaseFileProcessor):
