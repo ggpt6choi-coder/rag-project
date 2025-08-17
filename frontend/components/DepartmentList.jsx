@@ -13,7 +13,7 @@ const DEPARTMENTS = [
   '품질관리팀',
 ];
 
-export default function DepartmentList({ selected, onSelect }) {
+export default function DepartmentList({ selected, onSelect, unreadAnswers = {} }) {
   return (
     <nav style={{ flex: 1, display: 'flex', flexDirection: 'column', padding: '28px 0 0 0', background: '#202123', color: '#fff', minHeight: 0 }}>
       <ul style={{ flex: 1, overflowY: 'auto', padding: 0, margin: 0, listStyle: 'none', scrollbarWidth: 'thin', scrollbarColor: '#353740 #202123' }}>
@@ -42,6 +42,23 @@ export default function DepartmentList({ selected, onSelect }) {
           >
             <span style={{ marginRight: 14, fontSize: 20, opacity: 0.8 }}>🏢</span>
             {dept}
+            {unreadAnswers[dept] && (
+              <span style={{
+                marginLeft: 10,
+                background: '#ff1744',
+                color: '#fff',
+                borderRadius: '50%',
+                width: 14,
+                height: 14,
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                fontSize: 11,
+                fontWeight: 700,
+                boxShadow: '0 1px 4px rgba(0,0,0,0.13)',
+                verticalAlign: 'middle',
+              }}>●</span>
+            )}
           </li>
         ))}
       </ul>

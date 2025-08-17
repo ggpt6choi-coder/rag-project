@@ -132,6 +132,7 @@ class QAService:
     def ask_question(self, question: str, collection_name: str = "pdf_documents", 
                     max_results: int = 5, max_tokens: int = 500, document_id: str = None, history=None) -> Dict[str, Any]:
         """질문에 대한 답변 생성 (출처/근거 정보 포함)"""
+        import re
         try:
             logger.info(f"질문 처리 시작: {question}")
             # 1. 관련 문서 검색
@@ -140,7 +141,7 @@ class QAService:
                 search_service = SearchService(QdrantManager(collection_name=collection_name), self.embedding_service)
             search_results = search_service.search(
                 query=question,
-                limit=max_results,
+                limit=max_results * 3,  # 충분히 넉넉히 받아서 필터링
                 document_id=document_id
             )
             logger.info(f"검색 결과: {len(search_results)}개")
@@ -152,10 +153,57 @@ class QAService:
                     "sources": [],
                     "search_results": []
                 }
-            # 2. 검색된 텍스트 추출 및 출처 메타데이터 수집
+
+            # 1-1. 쿼리에서 '필드명:값' 패턴 추출 (예: TR명: AB0087R, 담당자: 이민호)
+            field_match = re.findall(r"([\w가-힣]+)\s*[:：]\s*([\w가-힣0-9]+)", question)
+            field_filters = {k.strip(): v.strip() for k, v in field_match} if field_match else {}
+
+            # 1-1b. 쿼리에서 고유값(영문+숫자+영문, 숫자 등) 패턴도 추출 (예: AB0087R)
+            value_patterns = re.findall(r"[A-Z]{2}\d{4,5}[A-Z]", question)  # 예: AB0087R
+            value_patterns += re.findall(r"\d{5,}", question)  # 5자리 이상 숫자도 포함
+            # 중복 제거
+            value_patterns = list(set(value_patterns))
+
+            # 1-2. 동적 필드 매칭 (컬럼명 하드코딩 없이)
+            filtered_results = search_results
+            # 1) 필드명:값 패턴이 있으면 해당 필드 우선
+            if field_filters:
+                def is_exact_match(res):
+                    meta = res.get("metadata", {})
+                    for k, v in field_filters.items():
+                        if k in meta and str(meta[k]).strip() == v:
+                            continue
+                        elif k in res and str(res[k]).strip() == v:
+                            continue
+                        else:
+                            return False
+                    return True
+                exact_matches = [r for r in search_results if is_exact_match(r)]
+                if exact_matches:
+                    filtered_results = exact_matches
+                else:
+                    filtered_results = search_results
+            # 2) 필드명:값 패턴이 없고, 고유값 패턴이 있으면 모든 필드에 대해 동적 매칭
+            elif value_patterns:
+                def has_value_any_field(res):
+                    meta = res.get("metadata", {})
+                    for v in value_patterns:
+                        # 메타데이터의 모든 필드에 대해 값이 정확히 일치하는지 검사
+                        if any(str(val).strip() == v for val in meta.values()):
+                            return True
+                        # payload에도 혹시 있을 수 있음
+                        if any(str(val).strip() == v for val in res.values()):
+                            return True
+                    return False
+                exact_matches = [r for r in search_results if has_value_any_field(r)]
+                if exact_matches:
+                    filtered_results = exact_matches
+                else:
+                    filtered_results = search_results
+            # 2. 검색된 텍스트 추출 및 출처 메타데이터 수집 (정확 매칭 결과만 context로 사용)
             context_texts = []
             sources = []
-            for result in search_results:
+            for result in filtered_results[:max_results]:
                 text = result.get("text", "")
                 if text:
                     context_texts.append(text)
@@ -165,16 +213,30 @@ class QAService:
                             meta_dict[k] = result["metadata"][k]
                         elif k in result:
                             meta_dict[k] = result[k]
+                    # 동적 필드도 근거에 추가
+                    if "metadata" in result:
+                        for fk in field_filters.keys():
+                            if fk in result["metadata"]:
+                                meta_dict[fk] = result["metadata"][fk]
                     if meta_dict:
                         sources.append(meta_dict)
-            # 3. LLM을 사용한 답변 생성
+            # 3. 정확 매칭 결과가 없으면 답변 자체를 정보 없음으로 제한
+            if not context_texts:
+                return {
+                    "question": question,
+                    "answer": "죄송합니다. 해당 정보를 찾을 수 없습니다.",
+                    "sources": [],
+                    "search_results": [],
+                    "context_count": 0
+                }
+            # 4. LLM을 사용한 답변 생성
             answer = self.generate_answer(question, context_texts, max_tokens, history)
-            # 4. 답변에 출처 추가 (자연어 근거)
+            # 5. 답변에 출처 추가 (자연어 근거)
             if sources:
                 readable_sources = []
                 for i, src in enumerate(sources):
                     # 해당 청크의 텍스트 일부 추출
-                    chunk_text = search_results[i].get("text", "")
+                    chunk_text = filtered_results[i].get("text", "")
                     chunk_preview = chunk_text.strip().replace("\n", " ")[:80] + ("..." if len(chunk_text) > 80 else "")
                     doc_name = src.get("title") or src.get("document_id", "문서")
                     page = src.get("page_number")
@@ -187,6 +249,10 @@ class QAService:
                         meta_parts.append(f"시트: {sheet}")
                     if page is not None:
                         meta_parts.append(f"페이지: {page}")
+                    # 동적 필드 근거 추가
+                    for fk in field_filters.keys():
+                        if fk in src:
+                            meta_parts.append(f"{fk}: {src[fk]}")
                     readable = f"- \"{chunk_preview}\" ({', '.join(meta_parts)})"
                     readable_sources.append(readable)
                 answer += f"\n\n📄 관련 출처:\n" + "\n".join(readable_sources)
@@ -194,7 +260,7 @@ class QAService:
                 "question": question,
                 "answer": answer,
                 "sources": sources,
-                "search_results": search_results,
+                "search_results": filtered_results[:max_results],
                 "context_count": len(context_texts)
             }
         except Exception as e:

@@ -1,5 +1,5 @@
 // 파일 전체를 App.jsx로 이동
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import DepartmentList from './components/DepartmentList';
 import ChatPanel from './components/ChatPanel';
 import { QueryClient, QueryClientProvider } from 'react-query';
@@ -8,16 +8,41 @@ import FileUpload from './components/FileUpload';
 
 const queryClient = new QueryClient();
 
+
+
 export default function App() {
   const [selectedDept, setSelectedDept] = useState(null);
   const [toast, setToast] = useState(null);
-  // ChatPanel의 ref를 통해 setMessages 접근
-  const chatPanelRef = React.useRef();
+  const [unreadAnswers, setUnreadAnswers] = useState({}); // {부서명: true/false}
+  const chatPanelRef = useRef();
+  // 팀별 messages/loading 상태 관리
+  const [chatStates, setChatStates] = useState({}); // { [부서명]: { messages: [], loading: false } }
 
-  const handleDeptSelect = (dept) => setSelectedDept(dept);
+  // 부서 클릭 시 해당 부서 unread 해제
+  const handleDeptSelect = (dept) => {
+    setSelectedDept(dept);
+    setUnreadAnswers(prev => ({ ...prev, [dept]: false }));
+  };
+
   const handleUploadSuccess = (msg) => {
     setToast(msg);
     setTimeout(() => setToast(null), 3000);
+  };
+
+  // 팀별 messages setter
+  const setMessages = (dept, updater) => {
+    setChatStates(prev => {
+      const prevDeptState = prev[dept] || { messages: [], loading: false };
+      const newMessages = typeof updater === 'function' ? updater(prevDeptState.messages) : updater;
+      return { ...prev, [dept]: { ...prevDeptState, messages: newMessages } };
+    });
+  };
+  // 팀별 loading setter
+  const setLoading = (dept, value) => {
+    setChatStates(prev => {
+      const prevDeptState = prev[dept] || { messages: [], loading: false };
+      return { ...prev, [dept]: { ...prevDeptState, loading: value } };
+    });
   };
 
   return (
@@ -49,7 +74,7 @@ export default function App() {
           }}
         >
           <div style={{ fontWeight: 700, fontSize: 22, padding: '28px 0 18px 32px', letterSpacing: 1, color: '#fff', borderBottom: '1px solid #2a2b32' }}>부서 선택</div>
-          <DepartmentList selected={selectedDept} onSelect={handleDeptSelect} />
+          <DepartmentList selected={selectedDept} onSelect={handleDeptSelect} unreadAnswers={unreadAnswers} />
         </aside>
         {/* 우측: chatGPT 스타일 대화창 */}
         <main
@@ -149,7 +174,27 @@ export default function App() {
               overflow: 'hidden',
             }}
           >
-            <ChatPanel ref={chatPanelRef} collectionName={selectedDept} />
+            <ChatPanel
+              ref={chatPanelRef}
+              collectionName={selectedDept}
+              messages={selectedDept ? (chatStates[selectedDept]?.messages || []) : []}
+              loading={selectedDept ? (chatStates[selectedDept]?.loading || false) : false}
+              setMessages={(updater) => selectedDept && setMessages(selectedDept, updater)}
+              setLoading={(value) => selectedDept && setLoading(selectedDept, value)}
+              onAnswerToOtherDept={(dept, answerObj) => {
+                // 답변 도착한 부서에 답변 추가 및 로딩 해제, 알림 뱃지
+                setMessages(dept, prev => [
+                  ...prev,
+                  {
+                    role: 'assistant',
+                    content: answerObj.answer,
+                    timestamp: answerObj.timestamp,
+                  },
+                ]);
+                setLoading(dept, false);
+                setUnreadAnswers(prev => ({ ...prev, [dept]: true }));
+              }}
+            />
           </div>
         </main>
         {toast && <Toast message={toast} />}

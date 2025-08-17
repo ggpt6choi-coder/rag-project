@@ -1,6 +1,4 @@
 import React, { useState, useRef, useEffect, useImperativeHandle, forwardRef } from 'react';
-import useChatStorage from '../hooks/useChatStorage';
-import useLoadingStorage from '../hooks/useLoadingStorage';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import FileUpload from './FileUpload';
@@ -30,10 +28,9 @@ function flattenChildren(children) {
 }
 
 
-const ChatPanel = forwardRef(function ChatPanel({ collectionName, onUploadSuccess }, ref) {
+
+const ChatPanel = forwardRef(function ChatPanel({ collectionName, messages, loading, setMessages, setLoading, onAnswerToOtherDept }, ref) {
   const [input, setInput] = useState('');
-  const [messages, setMessages] = useChatStorage(collectionName);
-  const [loading, setLoading] = useLoadingStorage(collectionName);
   const [error, setError] = useState(null);
   const messagesEndRef = useRef(null);
   const abortControllerRef = useRef(null);
@@ -60,7 +57,7 @@ const ChatPanel = forwardRef(function ChatPanel({ collectionName, onUploadSucces
       content: input,
       timestamp: now.toISOString(),
     };
-    setMessages((prev) => [...prev, userMsg]);
+    setMessages(prev => [...prev, userMsg]);
     setLoading(true);
     setError(null);
     setInput('');
@@ -82,22 +79,31 @@ const ChatPanel = forwardRef(function ChatPanel({ collectionName, onUploadSucces
       });
       const data = await res.json();
       const now2 = new Date();
-      setMessages((prev) => [
-        ...prev,
-        {
-          role: 'assistant',
-          content: data.answer || data.message,
+      // 답변이 현재 collectionName과 다를 때 알림 콜백 호출
+      if (data.collection_name && data.collection_name !== collectionName && onAnswerToOtherDept) {
+        onAnswerToOtherDept(data.collection_name, {
+          answer: data.answer || data.message,
           timestamp: now2.toISOString(),
-        },
-      ]);
+        });
+      } else {
+        setMessages(prev => [
+          ...prev,
+          {
+            role: 'assistant',
+            content: data.answer || data.message,
+            timestamp: now2.toISOString(),
+          },
+        ]);
+        setLoading(false);
+      }
     } catch (err) {
       if (err.name === 'AbortError') {
         // 취소 시 말풍선은 handleCancel에서 처리, 에러 메시지 없음
       } else {
         setError('답변 실패');
       }
+      setLoading(false);
     }
-    setLoading(false);
     abortControllerRef.current = null;
   };
 
@@ -167,13 +173,13 @@ const ChatPanel = forwardRef(function ChatPanel({ collectionName, onUploadSucces
             key={i}
             style={{
               display: 'flex',
-              flexDirection: msg.role === 'user' ? 'row-reverse' : 'row',
-              alignItems: 'flex-start',
+              flexDirection: 'column',
+              alignItems: msg.role === 'user' ? 'flex-end' : 'flex-start',
               width: '100%',
               gap: 8,
             }}
           >
-            {/* 말풍선 */}
+            {/* 말풍선 (질문/답변 모두 동일 구조) */}
             <div
               style={{
                 maxWidth: '62%',
@@ -188,7 +194,7 @@ const ChatPanel = forwardRef(function ChatPanel({ collectionName, onUploadSucces
                     : '22px 22px 22px 6px',
                 padding: '16px 22px',
                 margin:
-                  msg.role === 'user' ? '0 28px 0 0' : '0 0 0 28px',
+                  msg.role === 'user' ? '0 0 0 28px' : '0 28px 0 0',
                 boxShadow: '0 4px 16px rgba(25, 118, 210, 0.10)',
                 fontSize: 17,
                 wordBreak: 'break-word',
@@ -200,7 +206,10 @@ const ChatPanel = forwardRef(function ChatPanel({ collectionName, onUploadSucces
                 position: 'relative',
                 fontWeight: 500,
                 letterSpacing: 0.1,
-                marginBottom: 6,
+                marginBottom: 2,
+                display: 'flex',
+                flexDirection: 'column',
+                justifyContent: 'space-between',
               }}
             >
               {msg.role === 'assistant' && (
@@ -216,63 +225,63 @@ const ChatPanel = forwardRef(function ChatPanel({ collectionName, onUploadSucces
                   🤖
                 </span>
               )}
-              {msg.role === 'assistant'
-                ? <>
-                  <pre style={{ whiteSpace: 'pre-wrap', fontFamily: 'inherit', background: 'none', border: 'none', padding: 0, margin: 0 }}>
-                    {toSafeMarkdownString(msg.content)}
-                  </pre>
-                  {msg.sources && (
-                    <div style={{ marginTop: 8 }}>
-                      <button
-                        onClick={() => setOpenSourcesIdx(openSourcesIdx === i ? null : i)}
-                        style={{
-                          background: '#f7f8fa',
-                          border: '1px solid #e0e0e0',
-                          borderRadius: 8,
-                          fontSize: 13,
-                          color: '#1976d2',
-                          padding: '3px 14px',
-                          cursor: 'pointer',
-                          fontWeight: 600,
-                          marginTop: 2,
-                        }}
-                      >
-                        {openSourcesIdx === i ? '▲ 출처 닫기' : '▼ 관련 출처'}
-                      </button>
-                      {openSourcesIdx === i && (
-                        <div style={{ marginTop: 6, background: '#f7f8fa', borderRadius: 8, padding: 10, fontSize: 14, color: '#444', whiteSpace: 'pre-wrap' }}>
-                          {typeof msg.sources === 'string'
-                            ? msg.sources
-                            : JSON.stringify(msg.sources, null, 2)}
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </>
-                : toSafeMarkdownString(msg.content)
-              }
-              {/* 시간/일시 표시는 말풍선 바깥 하단에 별도 표기 (아래쪽에 위치) */}
+              <div style={{ width: '100%' }}>
+                <pre style={{ whiteSpace: 'pre-wrap', fontFamily: 'inherit', background: 'none', border: 'none', padding: 0, margin: 0 }}>
+                  {toSafeMarkdownString(msg.content)}
+                </pre>
+                {/* 답변에만 출처 표시 */}
+                {msg.role === 'assistant' && msg.sources && (
+                  <div style={{ marginTop: 8 }}>
+                    <button
+                      onClick={() => setOpenSourcesIdx(openSourcesIdx === i ? null : i)}
+                      style={{
+                        background: '#f7f8fa',
+                        border: '1px solid #e0e0e0',
+                        borderRadius: 8,
+                        fontSize: 13,
+                        color: '#1976d2',
+                        padding: '3px 14px',
+                        cursor: 'pointer',
+                        fontWeight: 600,
+                        marginTop: 2,
+                      }}
+                    >
+                      {openSourcesIdx === i ? '▲ 출처 닫기' : '▼ 관련 출처'}
+                    </button>
+                    {openSourcesIdx === i && (
+                      <div style={{ marginTop: 6, background: '#f7f8fa', borderRadius: 8, padding: 10, fontSize: 14, color: '#444', whiteSpace: 'pre-wrap' }}>
+                        {typeof msg.sources === 'string'
+                          ? msg.sources
+                          : JSON.stringify(msg.sources, null, 2)}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
             </div>
-            {/* 복사 버튼 (말풍선 바깥) */}
-            {/* 시간/일시 바깥 하단 표기 */}
+            {/* 말풍선 아래: 시간/복사 버튼 (column, 말풍선 기준 하단 정렬) */}
             <div style={{
-              fontSize: 13,
-              color: '#bdbdbd',
-              marginTop: 4,
-              marginBottom: 2,
-              textAlign: msg.role === 'user' ? 'right' : 'left',
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: msg.role === 'user' ? 'flex-end' : 'flex-start',
+              marginTop: 2,
+              marginBottom: 14,
+              gap: 4,
               width: '100%',
-              paddingLeft: msg.role === 'user' ? 0 : 36, // 말풍선 좌측 여백 보정
-              paddingRight: msg.role === 'user' ? 36 : 0 // 말풍선 우측 여백 보정
+              paddingLeft: msg.role === 'user' ? 0 : 36,
+              paddingRight: msg.role === 'user' ? 36 : 0,
             }}>
-              {msg.timestamp ? formatKoreanDateTime(msg.timestamp) : ''}
-            </div>
-            <div style={{ display: 'flex', alignItems: 'flex-start', height: '100%', marginTop: 2 }}>
-              <div style={{ position: 'relative' }}>
+              {/* 시간/날짜 */}
+              <span style={{
+                fontSize: 13,
+                color: '#bdbdbd',
+                flex: 'none',
+              }}>{msg.timestamp ? formatKoreanDateTime(msg.timestamp) : ''}</span>
+              {/* 복사 버튼 */}
+              <span style={{ flex: 'none', position: 'relative', display: 'inline-block' }}>
                 <button
                   onClick={e => {
                     navigator.clipboard.writeText(toSafeMarkdownString(msg.content));
-                    // scale 애니메이션
                     const btn = e.currentTarget;
                     if (btn) {
                       btn.style.transform = 'scale(1.25)';
@@ -310,7 +319,7 @@ const ChatPanel = forwardRef(function ChatPanel({ collectionName, onUploadSucces
                   style={{
                     position: 'absolute',
                     left: '50%',
-                    top: -28,
+                    top: '-30px',
                     transform: 'translateX(-50%)',
                     background: '#23272f',
                     color: '#fff',
@@ -324,7 +333,7 @@ const ChatPanel = forwardRef(function ChatPanel({ collectionName, onUploadSucces
                     zIndex: 10,
                   }}
                 >복사</span>
-              </div>
+              </span>
             </div>
           </div>
         ))

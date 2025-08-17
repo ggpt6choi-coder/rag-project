@@ -1,4 +1,5 @@
 import React, { useRef, useState } from 'react';
+import DocumentsModal from './DocumentsModal.mui';
 import { useMutation } from 'react-query';
 
 async function uploadFile({ file, collectionName }) {
@@ -18,8 +19,7 @@ export default function FileUpload({ collectionName, onSuccess, disabled, small 
   const [uploading, setUploading] = useState(false);
   const [done, setDone] = useState(false);
   const [error, setError] = useState(null);
-  const pollRef = useRef();
-  const failCountRef = useRef(0);
+  const [modalOpen, setModalOpen] = useState(false);
 
   const mutation = useMutation(uploadFile, {
     onSuccess: (data) => {
@@ -54,7 +54,7 @@ export default function FileUpload({ collectionName, onSuccess, disabled, small 
   };
 
   return (
-    <div style={{ position: 'relative', display: 'flex', alignItems: 'center', height: small ? 32 : 44, flexDirection: 'column', width: '100%' }}>
+    <div style={{ position: 'relative', display: 'flex', alignItems: 'center', height: small ? 32 : 44, flexDirection: 'row', width: '100%' }}>
       <label
         style={{
           display: 'flex',
@@ -94,6 +94,26 @@ export default function FileUpload({ collectionName, onSuccess, disabled, small 
           disabled={uploading || disabled}
         />
       </label>
+      <button
+        style={{
+          marginLeft: 16,
+          padding: small ? '6px 16px' : '12px 24px',
+          borderRadius: 18,
+          background: !collectionName || uploading || disabled ? '#f5f5f5' : '#fff',
+          color: !collectionName || uploading || disabled ? '#bdbdbd' : '#1976d2',
+          fontWeight: 600,
+          fontSize: small ? 14 : 16,
+          border: '1.5px solid #1976d2',
+          cursor: !collectionName || uploading || disabled ? 'not-allowed' : 'pointer',
+          opacity: !collectionName || uploading || disabled ? 0.6 : 1,
+          boxShadow: '0 2px 8px rgba(25, 118, 210, 0.07)',
+          transition: 'all 0.18s',
+        }}
+        onClick={() => { if (collectionName && !uploading && !disabled) setModalOpen(true); }}
+        disabled={!collectionName || uploading || disabled}
+      >
+        업로드 파일 목록
+      </button>
       {error && (
         <div style={{ width: '100%', marginTop: 6, fontSize: 13, color: '#d32f2f', minHeight: 18 }}>{error}</div>
       )}
@@ -103,6 +123,7 @@ export default function FileUpload({ collectionName, onSuccess, disabled, small 
           100% { transform: rotate(360deg); }
         }
       `}</style>
+      <DocumentsModal open={modalOpen} onClose={() => setModalOpen(false)} collectionName={collectionName} />
     </div>
   );
 }

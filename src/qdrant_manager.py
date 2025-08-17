@@ -122,12 +122,13 @@ class QdrantManager:
             
             # 포인트 생성
             points = []
+            import uuid
             for i, chunk in enumerate(embedded_chunks):
                 embedding = chunk.get('embedding', [])
                 if not embedding:
                     logger.warning(f"청크 {i}에 임베딩이 없습니다")
                     continue
-                
+
                 # 페이로드 구성
                 payload = {
                     'text': chunk.get('text', ''),
@@ -141,8 +142,10 @@ class QdrantManager:
                 if 'metadata' in chunk and isinstance(chunk['metadata'], dict):
                     for k, v in chunk['metadata'].items():
                         payload[k] = v
+                # Qdrant가 허용하는 UUID로 point id 생성
+                point_id = str(uuid.uuid4())
                 point = PointStruct(
-                    id=i,  # 정수 ID 사용
+                    id=point_id,
                     vector=embedding,
                     payload=payload
                 )
@@ -281,19 +284,18 @@ class QdrantManager:
     def delete_document(self, document_id: str) -> bool:
         """
         특정 문서의 모든 벡터를 삭제합니다.
-        
+        (qdrant-client 구버전 호환: filter로 id 조회 후 id 리스트로 삭제)
         Args:
             document_id: 삭제할 문서 ID
-            
         Returns:
             삭제 성공 여부
         """
         if not self.client:
             if not self.connect():
                 return False
-        
+
         try:
-            # 문서 ID로 필터링하여 삭제
+            # 1. 해당 document_id의 point id들을 모두 조회
             filter_condition = Filter(
                 must=[
                     FieldCondition(
@@ -302,15 +304,22 @@ class QdrantManager:
                     )
                 ]
             )
-            
+            points, _ = self.client.scroll(
+                collection_name=self.collection_name,
+                filter=filter_condition,
+                limit=10000
+            )
+            point_ids = [point.id for point in points]
+            if not point_ids:
+                logger.info(f"삭제할 포인트 없음: document_id={document_id}")
+                return True
+            # 2. id 리스트로 삭제
             self.client.delete(
                 collection_name=self.collection_name,
-                points_selector=filter_condition
+                points_selector=point_ids
             )
-            
-            logger.info(f"문서 '{document_id}' 삭제 완료")
+            logger.info(f"문서 '{document_id}' 삭제 완료 (포인트 {len(point_ids)}개)")
             return True
-            
         except Exception as e:
             logger.error(f"문서 삭제 실패: {e}")
             return False
@@ -333,18 +342,22 @@ class QdrantManager:
                 collection_name=self.collection_name,
                 limit=10000  # 충분히 큰 값
             )[0]
-            
+
             # 고유한 문서 ID 추출
             document_ids = set()
             for point in points:
                 payload = point.payload
                 if 'document_id' in payload:
                     document_ids.add(payload['document_id'])
-            
+
             return list(document_ids)
-            
+
         except Exception as e:
-            logger.error(f"문서 목록 조회 실패: {e}")
+            # 컬렉션이 없을 때는 에러 로그 대신 info로 남기고 빈 리스트 반환
+            if 'Not found: Collection' in str(e) or '404' in str(e):
+                logger.info(f"컬렉션 없음: {self.collection_name} (문서 없음)")
+            else:
+                logger.error(f"문서 목록 조회 실패: {e}")
             return []
     
     def create_filter(self, document_id: str = None, page_number: int = None, 
@@ -418,5 +431,9 @@ class QdrantManager:
                 return points[0].payload.get("metadata", points[0].payload)
             return {}
         except Exception as e:
-            logger.error(f"문서 메타데이터 조회 실패: {e}")
+            # filter 인자 관련 에러는 info로만 남기고 빈 dict 반환
+            if "Unknown arguments: ['filter']" in str(e):
+                logger.info(f"qdrant-client 버전 미지원: filter 인자 사용 불가 (document_id={document_id})")
+            else:
+                logger.error(f"문서 메타데이터 조회 실패: {e}")
             return {}

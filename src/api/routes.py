@@ -4,7 +4,7 @@ import time
 import uuid
 from typing import List
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Depends, BackgroundTasks
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
 from loguru import logger
 
 from .models import (
@@ -24,6 +24,26 @@ from src.qa_service import QAService
 
 # 라우터 생성
 router = APIRouter()
+
+# 다운로드 엔드포인트는 router 선언 이후에 위치해야 함
+@router.get("/download/{document_id}")
+async def download_document(document_id: str):
+    """
+    document_id로 업로드된 원본 파일을 다운로드합니다.
+    """
+    try:
+        # Qdrant에서 document_id로 메타데이터 조회
+        meta = qdrant_manager.get_document_metadata(document_id)
+        if not meta or 'file_path' not in meta:
+            raise HTTPException(status_code=404, detail="파일 경로 정보가 없습니다.")
+        file_path = meta['file_path']
+        if not os.path.exists(file_path):
+            raise HTTPException(status_code=404, detail="파일이 존재하지 않습니다.")
+        filename = meta.get('filename', os.path.basename(file_path))
+        return FileResponse(file_path, filename=filename)
+    except Exception as e:
+        logger.error(f"파일 다운로드 오류: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 # 업로드/벡터 적재 진행상태 조회 API (router 선언 이후로 이동)
 @router.get("/upload-progress/{task_id}")
@@ -176,7 +196,8 @@ async def upload_file(
                 if document_id:
                     doc_id = document_id
                 else:
-                    today = time.strftime('%Y%m%d')
+                    # 년월일시분초(예: 250817173232) 포맷으로 today 생성
+                    today = time.strftime('%y%m%d%H%M%S')
                     dept = collection_name if collection_name else 'unknown'
                     base_filename = os.path.basename(file.filename)
                     doc_id = f"{today}_{dept}_{base_filename}"
@@ -239,39 +260,74 @@ async def search_documents(request: SearchRequest):
         logger.error(f"검색 중 오류: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+from fastapi import Query
+
 @router.get("/documents", response_model=DocumentsResponse)
-async def get_documents():
+async def get_documents(collection_name: str = Query(None, description="부서명(컬렉션명), 없으면 전체 조회")):
     """
-    저장된 문서 목록을 반환합니다.
+    저장된 문서 목록을 반환합니다. (collection_name이 있으면 해당 컬렉션만, 없으면 전체)
     """
     try:
-        document_ids = search_service.get_documents()
         documents = []
-        # 각 document_id별 대표 메타데이터 추출
         from datetime import datetime
-        for doc_id in document_ids:
-            # Qdrant에서 해당 document_id의 첫 번째 벡터(포인트) 메타데이터 조회
-            meta = qdrant_manager.get_document_metadata(doc_id)
-            extraction_time = meta.get('extraction_time', None) if meta else None
-            # extraction_time이 없거나 빈 문자열이면 현재 시간으로 대체
-            if not extraction_time:
-                upload_time = datetime.now()
-            else:
-                try:
-                    upload_time = datetime.fromisoformat(extraction_time)
-                except Exception:
+        # 전체 컬렉션 조회
+        if not collection_name:
+            # Qdrant 연결이 안 되어 있으면 연결
+            if not qdrant_manager.client:
+                qdrant_manager.connect()
+            all_collections = qdrant_manager.client.get_collections().collections
+            for col in all_collections:
+                mgr = QdrantManager(collection_name=col.name)
+                if not mgr.client:
+                    mgr.connect()
+                doc_ids = mgr.get_documents()
+                for doc_id in doc_ids:
+                    meta = mgr.get_document_metadata(doc_id)
+                    extraction_time = meta.get('extraction_time', None) if meta else None
+                    if not extraction_time:
+                        upload_time = datetime.now()
+                    else:
+                        try:
+                            upload_time = datetime.fromisoformat(extraction_time)
+                        except Exception:
+                            upload_time = datetime.now()
+                    documents.append({
+                        'document_id': doc_id,
+                        'title': meta.get('title', f"Document {doc_id}") if meta else f"Document {doc_id}",
+                        'author': meta.get('author', "Unknown") if meta else "Unknown",
+                        'description': meta.get('description', "") if meta else "",
+                        'file_type': meta.get('file_type', "") if meta else "",
+                        'total_pages': meta.get('total_pages', 0) if meta else 0,
+                        'chunks_count': meta.get('chunks_count', 0) if meta else 0,
+                        'upload_time': upload_time,
+                        'file_size': meta.get('file_size', 0) if meta else 0,
+                        'collection_name': col.name
+                    })
+        else:
+            mgr = QdrantManager(collection_name=collection_name)
+            doc_ids = mgr.get_documents()
+            for doc_id in doc_ids:
+                meta = mgr.get_document_metadata(doc_id)
+                extraction_time = meta.get('extraction_time', None) if meta else None
+                if not extraction_time:
                     upload_time = datetime.now()
-            documents.append({
-                'document_id': doc_id,
-                'title': meta.get('title', f"Document {doc_id}") if meta else f"Document {doc_id}",
-                'author': meta.get('author', "Unknown") if meta else "Unknown",
-                'description': meta.get('description', "") if meta else "",
-                'file_type': meta.get('file_type', "") if meta else "",
-                'total_pages': meta.get('total_pages', 0) if meta else 0,
-                'chunks_count': meta.get('chunks_count', 0) if meta else 0,
-                'upload_time': upload_time,
-                'file_size': meta.get('file_size', 0) if meta else 0
-            })
+                else:
+                    try:
+                        upload_time = datetime.fromisoformat(extraction_time)
+                    except Exception:
+                        upload_time = datetime.now()
+                documents.append({
+                    'document_id': doc_id,
+                    'title': meta.get('title', f"Document {doc_id}") if meta else f"Document {doc_id}",
+                    'author': meta.get('author', "Unknown") if meta else "Unknown",
+                    'description': meta.get('description', "") if meta else "",
+                    'file_type': meta.get('file_type', "") if meta else "",
+                    'total_pages': meta.get('total_pages', 0) if meta else 0,
+                    'chunks_count': meta.get('chunks_count', 0) if meta else 0,
+                    'upload_time': upload_time,
+                    'file_size': meta.get('file_size', 0) if meta else 0,
+                    'collection_name': collection_name
+                })
         return DocumentsResponse(
             documents=documents,
             total_documents=len(documents)
@@ -294,24 +350,57 @@ async def get_collection_info():
         logger.error(f"컬렉션 정보 조회 중 오류: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+from fastapi import Query
+
+# collection_name 쿼리 파라미터를 추가하여 컬렉션별로 문서 삭제
 @router.delete("/documents/{document_id}", response_model=DeleteDocumentResponse)
-async def delete_document(document_id: str):
+async def delete_document(document_id: str, collection_name: str = Query(None, description="부서명(컬렉션명)")):
     """
-    특정 문서를 삭제합니다.
+    특정 문서를 삭제합니다. (collection_name이 있으면 해당 컬렉션에서 삭제)
     """
     try:
-        success = search_service.delete_document(document_id)
-        
-        if not success:
-            raise HTTPException(status_code=404, detail="문서를 찾을 수 없습니다")
-        
+        # 1. Qdrant 데이터 삭제
+        if collection_name:
+            mgr = QdrantManager(collection_name=collection_name)
+            success = mgr.delete_document(document_id)
+            # 2. 파일 삭제 (collection_name이 명확할 때만)
+            meta = mgr.get_document_metadata(document_id)
+        else:
+            # collection_name이 없으면 전체 컬렉션에서 시도
+            found = False
+            deleted_chunks = 0
+            meta = None
+            if not qdrant_manager.client:
+                qdrant_manager.connect()
+            all_collections = qdrant_manager.client.get_collections().collections
+            for col in all_collections:
+                mgr = QdrantManager(collection_name=col.name)
+                if not mgr.client:
+                    mgr.connect()
+                success = mgr.delete_document(document_id)
+                if success:
+                    found = True
+                    # 파일 삭제를 위해 메타데이터 조회
+                    meta = mgr.get_document_metadata(document_id)
+                    break
+            if not found:
+                raise HTTPException(status_code=404, detail="문서를 찾을 수 없습니다")
+        # 2. 파일 삭제 (메타데이터에 file_path가 있으면)
+        file_deleted = False
+        if meta and isinstance(meta, dict):
+            file_path = meta.get('file_path')
+            if file_path and os.path.exists(file_path):
+                try:
+                    os.remove(file_path)
+                    file_deleted = True
+                except Exception as fe:
+                    logger.error(f"파일 삭제 실패: {fe}")
         return DeleteDocumentResponse(
             document_id=document_id,
             status="success",
-            message="문서 삭제 완료",
+            message=f"문서 삭제 완료 (파일 삭제: {'성공' if file_deleted else '실패/없음'})",
             deleted_chunks=0  # 실제로는 삭제된 청크 수를 계산해야 함
         )
-        
     except Exception as e:
         logger.error(f"문서 삭제 중 오류: {e}")
         raise HTTPException(status_code=500, detail=str(e))
