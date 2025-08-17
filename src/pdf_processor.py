@@ -87,12 +87,9 @@ class ExcelProcessor(BaseFileProcessor):
 
     def extract_chunks(self, file_path: str, department: str = None) -> list:
         import openpyxl
-        import re
         filename = os.path.basename(file_path)
         chunks = []
         wb = openpyxl.load_workbook(file_path, data_only=True)
-        # 주요 정보 키워드 후보 (정답, 번역, 예시 등)
-        main_keywords = ["정답", "정답어", "answer", "번역", "translation", "예시", "example", "표현", "표현문장", "사용 예시", "예문"]
         for sheet in wb.worksheets:
             try:
                 rows = list(sheet.iter_rows(values_only=True))
@@ -105,8 +102,6 @@ class ExcelProcessor(BaseFileProcessor):
             if header_row is None or all(cell is None or str(cell).strip() == "" for cell in (header_row or [])):
                 continue
             header = [str(cell) if cell is not None else "" for cell in (header_row or [])]
-            # 주요 칼럼 자동 감지
-            main_cols = [h for h in header if any(re.search(k, h, re.IGNORECASE) for k in main_keywords)]
             for row_idx, row in enumerate(rows[1:], start=2):
                 if row is None or not isinstance(row, (list, tuple)) or all(cell is None for cell in (row or [])):
                     continue
@@ -114,12 +109,8 @@ class ExcelProcessor(BaseFileProcessor):
                 row_dict = {k: v for k, v in zip(header, row_filled)}
                 if not any(v is not None and str(v).strip() != "" for v in row_dict.values()):
                     continue
-                # 주요 칼럼만 text로, 나머지는 메타데이터로
-                if main_cols:
-                    text = ", ".join(f"{k}: {row_dict[k]}" for k in main_cols if row_dict.get(k) is not None and str(row_dict[k]).strip() != "")
-                else:
-                    # 주요 칼럼이 없으면 모든 칼럼을 text로 사용
-                    text = ", ".join(f"{k}: {v}" for k, v in row_dict.items() if v is not None and str(v).strip() != "")
+                # 항상 모든 칼럼을 text로 사용
+                text = ", ".join(f"{k}: {v}" for k, v in row_dict.items() if v is not None and str(v).strip() != "")
                 meta = {
                     "type": "excel",
                     "sheet": sheet.title,
