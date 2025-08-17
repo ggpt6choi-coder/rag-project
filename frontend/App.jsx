@@ -1,5 +1,6 @@
 // 파일 전체를 App.jsx로 이동
 import React, { useState, useRef } from 'react';
+import useChatStorage from './hooks/useChatStorage';
 import DepartmentList from './components/DepartmentList';
 import ChatPanel from './components/ChatPanel';
 import { QueryClient, QueryClientProvider } from 'react-query';
@@ -16,8 +17,11 @@ export default function App() {
   const [toast, setToast] = useState(null);
   const [unreadAnswers, setUnreadAnswers] = useState({}); // {부서명: true/false}
   const chatPanelRef = useRef();
-  // 팀별 messages/loading 상태 관리
-  const [chatStates, setChatStates] = useState({}); // { [부서명]: { messages: [], loading: false } }
+  // 팀별 loading 상태만 관리
+  const [chatStates, setChatStates] = useState({}); // { [부서명]: { loading: false } }
+
+  // 부서별 messages는 useChatStorage로 관리
+  const [messages, setMessages] = useChatStorage(selectedDept);
 
   // 부서 클릭 시 해당 부서 unread 해제
   const handleDeptSelect = (dept) => {
@@ -30,13 +34,10 @@ export default function App() {
     setTimeout(() => setToast(null), 3000);
   };
 
-  // 팀별 messages setter
-  const setMessages = (dept, updater) => {
-    setChatStates(prev => {
-      const prevDeptState = prev[dept] || { messages: [], loading: false };
-      const newMessages = typeof updater === 'function' ? updater(prevDeptState.messages) : updater;
-      return { ...prev, [dept]: { ...prevDeptState, messages: newMessages } };
-    });
+  // 팀별 messages setter (useChatStorage만 사용)
+  // dept는 무시하고 현재 선택된 부서만 동작
+  const setMessagesForPanel = (updater) => {
+    setMessages(updater);
   };
   // 팀별 loading setter
   const setLoading = (dept, value) => {
@@ -218,21 +219,24 @@ export default function App() {
             <ChatPanel
               ref={chatPanelRef}
               collectionName={selectedDept}
-              messages={selectedDept ? (chatStates[selectedDept]?.messages || []) : []}
+              messages={messages}
               loading={selectedDept ? (chatStates[selectedDept]?.loading || false) : false}
-              setMessages={(updater) => selectedDept && setMessages(selectedDept, updater)}
+              setMessages={setMessagesForPanel}
               setLoading={(value) => selectedDept && setLoading(selectedDept, value)}
               ragOnly={ragOnly}
               onAnswerToOtherDept={(dept, answerObj) => {
-                // 답변 도착한 부서에 답변 추가 및 로딩 해제, 알림 뱃지
-                setMessages(dept, prev => [
-                  ...prev,
-                  {
-                    role: 'assistant',
-                    content: answerObj.answer,
-                    timestamp: answerObj.timestamp,
-                  },
-                ]);
+                // 답변 도착한 부서에 있을 때만 로컬스토리지에 추가
+                if (dept === selectedDept) {
+                  setMessages(prev => [
+                    ...prev,
+                    {
+                      role: 'assistant',
+                      content: answerObj.answer,
+                      timestamp: answerObj.timestamp,
+                      sources: answerObj.sources,
+                    },
+                  ]);
+                }
                 setLoading(dept, false);
                 setUnreadAnswers(prev => ({ ...prev, [dept]: true }));
               }}
