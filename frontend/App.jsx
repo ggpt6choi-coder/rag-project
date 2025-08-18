@@ -47,6 +47,18 @@ export default function App() {
     });
   };
 
+  // 부서별 메시지 추가 (로컬스토리지 직접 접근)
+  function addMessageToDept(dept, message) {
+    const key = dept ? `chat_history_${dept}` : null;
+    if (!key) return;
+    try {
+      const prev = JSON.parse(localStorage.getItem(key) || '[]');
+      const newMessages = [...prev, message];
+      localStorage.setItem(key, JSON.stringify(newMessages));
+      if (dept === selectedDept) setMessages(newMessages);
+    } catch { }
+  }
+
   return (
     <QueryClientProvider client={queryClient}>
       <div
@@ -225,18 +237,13 @@ export default function App() {
               setLoading={(value) => selectedDept && setLoading(selectedDept, value)}
               ragOnly={ragOnly}
               onAnswerToOtherDept={(dept, answerObj) => {
-                // 답변 도착한 부서에 있을 때만 로컬스토리지에 추가
-                if (dept === selectedDept) {
-                  setMessages(prev => [
-                    ...prev,
-                    {
-                      role: 'assistant',
-                      content: answerObj.answer,
-                      timestamp: answerObj.timestamp,
-                      sources: answerObj.sources,
-                    },
-                  ]);
-                }
+                // 답변 도착한 부서의 로컬스토리지에만 추가
+                addMessageToDept(dept, {
+                  role: 'assistant',
+                  content: answerObj.answer,
+                  timestamp: answerObj.timestamp,
+                  sources: answerObj.sources,
+                });
                 setLoading(dept, false);
                 setUnreadAnswers(prev => ({ ...prev, [dept]: true }));
               }}
